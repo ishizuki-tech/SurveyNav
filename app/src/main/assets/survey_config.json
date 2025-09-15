@@ -1,0 +1,20 @@
+{
+  "prompt": {
+    "template": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Write a brief analysis of weaknesses in the answer.\n- Provide a strong expected answer to the question.\n- Ask EXACTLY 3 follow-up questions for the question.\n- Score how well the answer matches the question from 1–100 (integer).\n\nOUTPUT RULES:\n- In English.\n- Keys: \"analysis\" (string), \"expected answer\", \"follow-up questions\" (array of 3 strings), \"score\" (int 0-100).\n- Entire output <512 chars.\n\nSTRICT OUTPUT (NO MARKDOWN):\n- Return RAW JSON only. DO NOT use Markdown, code fences, or backticks.\n- Output must be ONE LINE; first char '{', last char '}'.\n- No explanations or extra text.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n",
+    "language": "en",
+    "rules": []
+  },
+  "graph": {
+    "startId": "Start",
+    "nodes": [
+      { "id": "Start", "type": "START", "title": "Start", "question": "Start", "nextId": "Q1" },
+      { "id": "Q1", "type": "AI", "title": "Early Maturity (Days)", "question": "What do you consider an early-maturing maize variety? Please answer in days to maturity.", "nextId": "Q2" },
+      { "id": "Q2", "type": "AI", "title": "Current Variety DTM", "question": "In most seasons, how many days does your current maize variety take from planting to harvest?", "nextId": "Q3" },
+      { "id": "Q3", "type": "AI", "title": "Short Rains Deadline", "question": "During the short rains in your area, by which calendar month would you need to harvest to consider it early?", "nextId": "Q4" },
+      { "id": "Q4", "type": "AI", "title": "Yield Trade-off", "question": "What maximum yield loss would you accept to harvest earlier—percentage or bags per acre?", "nextId": "Q5" },
+      { "id": "Q5", "type": "AI", "title": "Top Factors", "question": "When choosing an early-maturing variety, which two factors matter most? (e.g., drought escape, pest escape, double-cropping, market timing)", "nextId": "Review" },
+      { "id": "Review", "type": "REVIEW", "title": "Review", "question": "", "nextId": "Done" },
+      { "id": "Done", "type": "DONE", "title": "Done", "question": "" }
+    ]
+  }
+}
