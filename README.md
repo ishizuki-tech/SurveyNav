@@ -99,9 +99,7 @@ android {
 
 ## 📌 Roadmap
 
-- [ ] Add bilingual (EN/JP) README  
 - [ ] GitHub Actions CI workflow  
-- [ ] Whisper / llama.cpp integration  
 - [ ] External JSON-based survey graph definition  
 
 ---
