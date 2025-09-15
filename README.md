@@ -108,7 +108,6 @@ android {
 
 ## 📜 License
 
-This project will be released under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).  
-(You may switch to MIT or another license depending on your distribution needs.)
+This project is licensed under the [MIT License](https://opensource.org/licenses/MIT).
 
 ---
