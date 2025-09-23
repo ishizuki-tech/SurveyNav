@@ -4,13 +4,43 @@ package com.negi.surveynav.screens
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.BottomAppBar
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -32,6 +62,7 @@ import com.negi.surveynav.vm.SurveyViewModel
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,142 +80,155 @@ fun AiScreen(
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
 
-    // ----- VM state -----
-    val question by remember(vmSurvey, nodeId) { vmSurvey.questions.map { it[nodeId].orEmpty() } }
-        .collectAsState(initial = vmSurvey.getQuestion(nodeId))
-    val answer by remember(vmSurvey, nodeId) { vmSurvey.answers.map { it[nodeId].orEmpty() } }
-        .collectAsState(initial = vmSurvey.getAnswer(nodeId))
+    // Rebuild subtree when nodeId changes to avoid state leakage
+    key(nodeId) {
 
-    val loading by vmAI.loading.collectAsState()
-    val score by vmAI.score.collectAsState()
-    val stream by vmAI.stream.collectAsState()
-    val raw by vmAI.raw.collectAsState()
-    val error by vmAI.error.collectAsState()
-    val followupQuestion by vmAI.followupQuestion.collectAsState()
+        // ----- VM state -----
+        val question by remember(
+            vmSurvey,
+            nodeId
+        ) { vmSurvey.questions.map { it[nodeId].orEmpty() } }
+            .collectAsState(initial = vmSurvey.getQuestion(nodeId))
+        val answer by remember(vmSurvey, nodeId) { vmSurvey.answers.map { it[nodeId].orEmpty() } }
+            .collectAsState(initial = vmSurvey.getAnswer(nodeId))
 
-    // ----- effects -----
-    LaunchedEffect(nodeId) {
-        // Focus the answer field on first appearance
-        focusRequester.requestFocus()
-        keyboard?.show()
-    }
-    LaunchedEffect(error) { error?.let { snack.showSnackbar(it) } }
+        val loading by vmAI.loading.collectAsState()
+        val score by vmAI.score.collectAsState()
+        val stream by vmAI.stream.collectAsState()
+        val raw by vmAI.raw.collectAsState()
+        val error by vmAI.error.collectAsState()
+        val followupQuestion by vmAI.followupQuestion.collectAsState()
 
-    // When a follow-up is produced (and loading is finished), record & display it once
-    LaunchedEffect(followupQuestion, loading, nodeId) {
-        val q = followupQuestion
-        if (!loading && q != null) {
-            vmSurvey.addFollowupQuestion(nodeId, q)
-            vmSurvey.setQuestion(q, nodeId)
+        // ----- effects -----
+
+        // Give focus & show keyboard on first appearance
+        LaunchedEffect(nodeId) {
+            focusRequester.requestFocus()
+            keyboard?.show()
         }
-    }
 
-    // Kick off evaluation
-    fun startEvaluation(curQuestion: String, curAnswer: String) {
-        if (curAnswer.isBlank() || loading) return
-        vmSurvey.answerLastFollowup(nodeId, curAnswer)
-        scope.launch {
-            vmAI.evaluateAsync(vmSurvey.getPrompt(nodeId, curQuestion, curAnswer))
-        }
-    }
+        // Snack on error
+        LaunchedEffect(error) { error?.let { snack.showSnackbar(it) } }
 
-    // Typography for dense UI
-    val smallStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 14.sp)
-
-    Scaffold(
-        containerColor = Color.Transparent,
-        topBar = {
-            TopAppBar(title = { Text("Question Eval. $nodeId", style = smallStyle) })
-        },
-        bottomBar = {
-            BottomAppBar(containerColor = Color.Transparent) {
-                Button(
-                    onClick = {
-                        vmAI.resetStates()
-                        onBack()
-                    }
-                ) { Text("Back", style = smallStyle) }
-
-                Spacer(Modifier.weight(1f))
-
-                Button(
-                    onClick = {
-                        focusRequester.freeFocus()
-                        keyboard?.hide()
-                        startEvaluation(question, answer)
-                    },
-                    enabled = answer.isNotBlank() && !loading
-                ) {
-                    Text(if (score == null) "Submit" else "Retry", style = smallStyle)
-                }
-
-                Spacer(Modifier.weight(1f))
-
-                OutlinedButton(
-                    onClick = {
-                        vmAI.resetStates()
-                        onNext()
-                    }
-                ) { Text("Next", style = smallStyle) }
+        // When follow-up is produced (and finished), record & display it once
+        LaunchedEffect(followupQuestion, loading, nodeId) {
+            val q = followupQuestion
+            if (!loading && q != null) {
+                vmSurvey.addFollowupQuestion(nodeId, q)
+                vmSurvey.setQuestion(q, nodeId)
             }
-        },
-        snackbarHost = { SnackbarHost(snack) }
-    ) { pad ->
-        CompositionLocalProvider(LocalTextStyle provides smallStyle) {
-            Column(
-                Modifier
-                    .padding(pad)
-                    .padding(20.dp)
-                    .fillMaxSize()
-                    .verticalScroll(vScroll) // single vertical scroller for the whole screen
-            ) {
-                // Read-only follow-up question (avoid accidental edits)
-                OutlinedTextField(
-                    value = question,
-                    onValueChange = { /* readOnly */ },
-                    readOnly = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = LocalTextStyle.current,
-                    label = { Text("Question", style = LocalTextStyle.current) },
-                )
+        }
 
-                // User answer
-                OutlinedTextField(
-                    value = answer,
-                    onValueChange = { vmSurvey.setAnswer(it, nodeId) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(focusRequester),
-                    minLines = 5,
-                    textStyle = LocalTextStyle.current,
-                    label = { Text("Your answer", style = LocalTextStyle.current) },
-                )
+        // Ensure AI states are cleared when leaving the screen
+        DisposableEffect(nodeId) {
+            onDispose { vmAI.resetStates() }
+        }
 
-                Spacer(Modifier.height(16.dp))
+        // Kick off evaluation
+        fun startEvaluation(curQuestion: String, curAnswer: String) {
+            if (curAnswer.isBlank() || loading) return
+            vmSurvey.answerLastFollowup(nodeId, curAnswer)
+            scope.launch {
+                vmAI.evaluateAsync(vmSurvey.getPrompt(nodeId, curQuestion, curAnswer))
+            }
+        }
 
-                if (loading) {
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(8.dp))
-                }
+        // Typography for dense UI
+        val smallStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 14.sp)
 
-                // Result area: JSON (pretty) or streaming text fallback
-                if (!raw.isNullOrBlank()) {
-                    val json = remember {
-                        Json {
-                            prettyPrint = true
-                            prettyPrintIndent = "  "
-                            ignoreUnknownKeys = true
+        Scaffold(
+            containerColor = Color.Transparent,
+            topBar = {
+                TopAppBar(title = { Text("Question Eval. $nodeId", style = smallStyle) })
+            },
+            bottomBar = {
+                BottomAppBar(containerColor = Color.Transparent) {
+                    Button(
+                        onClick = {
+                            vmAI.resetStates()
+                            onBack()
                         }
-                    }
-                    val pretty = remember(raw) { prettyOrRaw(json, raw!!) }
+                    ) { Text("Back", style = smallStyle) }
 
-                    JsonCard(pretty = pretty, score = score)
-                } else {
-                    Text("Output From SLM.")
-                    Spacer(Modifier.height(6.dp))
-                    Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(12.dp)) {
-                            Text(if (stream.isBlank()) "Waiting for response …" else stream)
+                    Spacer(Modifier.weight(1f))
+
+                    Button(
+                        onClick = {
+                            focusRequester.freeFocus()
+                            keyboard?.hide()
+                            startEvaluation(question, answer)
+                        },
+                        enabled = answer.isNotBlank() && !loading
+                    ) {
+                        Text(if (score == null) "Submit" else "Retry", style = smallStyle)
+                    }
+
+                    Spacer(Modifier.weight(1f))
+
+                    OutlinedButton(
+                        onClick = {
+                            vmAI.resetStates()
+                            onNext()
+                        }
+                    ) { Text("Next", style = smallStyle) }
+                }
+            },
+            snackbarHost = { SnackbarHost(snack) }
+        ) { pad ->
+            CompositionLocalProvider(LocalTextStyle provides smallStyle) {
+                Column(
+                    Modifier
+                        .padding(pad)
+                        .padding(20.dp)
+                        .fillMaxSize()
+                        .verticalScroll(vScroll) // single vertical scroller for the whole screen
+                ) {
+                    // Read-only follow-up question (avoid accidental edits)
+                    OutlinedTextField(
+                        value = question,
+                        onValueChange = { /* readOnly */ },
+                        readOnly = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = LocalTextStyle.current,
+                        label = { Text("Question", style = LocalTextStyle.current) },
+                    )
+
+                    // User answer
+                    OutlinedTextField(
+                        value = answer,
+                        onValueChange = { vmSurvey.setAnswer(it, nodeId) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(focusRequester),
+                        minLines = 5,
+                        textStyle = LocalTextStyle.current,
+                        label = { Text("Your answer", style = LocalTextStyle.current) },
+                    )
+
+                    Spacer(Modifier.height(16.dp))
+
+                    // Result area: JSON (pretty) or streaming text fallback
+                    if (!raw.isNullOrBlank()) {
+                        val json = remember {
+                            Json {
+                                prettyPrint = true
+                                prettyPrintIndent = " "
+                                ignoreUnknownKeys = true
+                            }
+                        }
+                        val pretty = remember(raw) { prettyOrRaw(json, raw!!) }
+                        JsonCard(pretty = pretty, score = score)
+                    } else {
+                        if (loading) {
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(8.dp))
+                            Text("Output From SLM.")
+                            Spacer(Modifier.height(6.dp))
+                            Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Text(if (stream.isBlank()) "Waiting for response …" else stream)
+                                }
+                            }
                         }
                     }
                 }
@@ -245,7 +289,8 @@ private fun JsonCard(
  */
 private fun prettyOrRaw(json: Json, raw: String): String =
     runCatching {
-        json.encodeToString(kotlinx.serialization.json.Json.parseToJsonElement(raw))
+        val element: JsonElement = json.parseToJsonElement(raw)
+        json.encodeToString(element) // prettyPrint=true in the Json instance
     }.getOrElse { raw }
 
 /* --------------------------- Horizontal Scrollbar -------------------------- */
@@ -261,7 +306,7 @@ private fun HorizontalScrollbar(
     val density = LocalDensity.current
     var viewportPx by remember { mutableStateOf(0) }
 
-    // ★ Composable な値は drawWithContent の外で評価してキャプチャ
+    // Evaluate theme-derived colors outside of draw phase
     val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
     val thumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
 
