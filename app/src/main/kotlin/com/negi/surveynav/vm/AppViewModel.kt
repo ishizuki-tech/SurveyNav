@@ -1,4 +1,4 @@
-package com.negi.surveynav
+package com.negi.surveynav.vm
 
 import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.negi.surveynav.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,8 +25,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.Response
 import java.io.File
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 sealed class DlState {
     data object Idle : DlState()
@@ -59,9 +63,9 @@ class AppViewModel() : ViewModel() {
 
     private val client: OkHttpClient = OkHttpClient.Builder()
         .addInterceptor(HfAuthInterceptor(hfToken.orEmpty()))
-        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-        .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .followRedirects(true)
         .followSslRedirects(true)
@@ -99,14 +103,14 @@ class AppViewModel() : ViewModel() {
         onProgress: (downloaded: Long, total: Long?) -> Unit
     ) = withContext(Dispatchers.IO) {
         dst.parentFile?.mkdirs()
-        val req = okhttp3.Request.Builder().url(url).build()
+        val req = Request.Builder().url(url).build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
                 val code = resp.code
                 val msg = resp.body?.string()?.take(200)
-                throw java.io.IOException("HTTP $code ${msg ?: ""}".trim())
+                throw IOException("HTTP $code ${msg ?: ""}".trim())
             }
-            val body = resp.body ?: throw java.io.IOException("empty body")
+            val body = resp.body ?: throw IOException("empty body")
             val total = body.contentLength().takeIf { it >= 0 }
             body.byteStream().use { input ->
                 // 一時ファイルに落としてからrename（不完全ファイル対策）

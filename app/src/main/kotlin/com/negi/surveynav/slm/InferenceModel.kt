@@ -26,6 +26,7 @@ class InferenceModel private constructor(appCtx: Context) {
     private val TAG = "InferenceModel"
 
     companion object {
+
         private const val MODEL_ASSET_NAME = "gemma-3n-E2B-it-int4.litertlm"
         private const val MAX_TOKENS = 512
         private const val DEFAULT_TOP_K = 20
@@ -201,6 +202,7 @@ class InferenceModel private constructor(appCtx: Context) {
         temperature: Float,
         randomSeed: Int? = null
     ): LlmInferenceSession {
+
         val sTopK = sanitizeTopK(topK)
         val sTopP = sanitizeTopP(topP)
         val sTemp = sanitizeTemperature(temperature)

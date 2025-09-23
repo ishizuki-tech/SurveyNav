@@ -1,10 +1,8 @@
-// file: com/negi/surveynav/AiViewModel.kt
-package com.negi.surveynav
+package com.negi.surveynav.vm
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.negi.surveynav.slm.FollowupExtractor.extractFollowupQuestion
-import com.negi.surveynav.slm.FollowupExtractor.extractScore
+import com.negi.surveynav.slm.FollowupExtractor
 import com.negi.surveynav.slm.Repository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -20,8 +18,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.atomic.AtomicBoolean
 
-private const val DEFAULT_TIMEOUT_MS = 120_000L
-
 /**
  * AI関連の処理だけを担当する ViewModel（完全置き換え版）
  * - テキスト評価の実行
@@ -31,7 +27,8 @@ private const val DEFAULT_TIMEOUT_MS = 120_000L
  */
 class AiViewModel(
     private val repo: Repository,
-    private val passThreshold: Int = 70
+    private val passThreshold: Int = 70,
+    private val DEFAULT_TIMEOUT_MS: Long = 120_000L
 ) : ViewModel() {
 
     private val _loading = MutableStateFlow(false)
@@ -89,7 +86,7 @@ class AiViewModel(
         try {
             withTimeout(timeoutMs) {
                 evalJob = viewModelScope.launch(Dispatchers.IO) {
-                    repo.scoreStreaming(prompt)
+                    repo.request(prompt)
                         .onEach { part ->
                             buf.append(part)
                             withContext(Dispatchers.Main.immediate) {
@@ -108,8 +105,8 @@ class AiViewModel(
             }
 
             val rawText = buf.toString()
-            val s = extractScore(rawText)
-            val followupQuestion = extractFollowupQuestion(rawText)
+            val s = FollowupExtractor.extractScore(rawText)
+            val followupQuestion = FollowupExtractor.extractFollowupQuestion(rawText)
             withContext(Dispatchers.Main.immediate) {
                 _raw.value = rawText
                 _score.value = s

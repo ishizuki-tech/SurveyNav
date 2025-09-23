@@ -27,8 +27,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.negi.surveynav.AiViewModel
-import com.negi.surveynav.SurveyViewModel
+import com.negi.surveynav.vm.AiViewModel
+import com.negi.surveynav.vm.SurveyViewModel
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json

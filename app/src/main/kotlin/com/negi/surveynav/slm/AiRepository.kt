@@ -1,92 +1,90 @@
 package com.negi.surveynav.slm
 
 import android.content.Context
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
-import kotlin.random.Random
 
-/* ============================================================
- * Repository 抽象：AI 評価 I/F
- * ============================================================ */
+/**
+ * Repository abstraction for AI scoring streaming.
+ */
 interface Repository {
-    suspend fun scoreStreaming(prompt: String): Flow<String>
+    suspend fun request(prompt: String): Flow<String>
 }
 
-class FakeRepository(
-    private val emitChunks: Int = 6,
-    private val perChunkDelayMs: Long = 30L,
-    private val simulateError: Boolean = false,
-    private val forceScore: Int? = null, // nullならランダム80±10
-) : Repository {
+/**
+ * MediaPipe-backed implementation of Repository.
+ *
+ * This class wraps an InferenceModel instance and exposes a streaming Flow of
+ * partial text results for a single request. The flow completes when the model
+ * signals the `done` flag on a partial result.
+ */
+class MediaPipeRepository(private val appContext: Context) : Repository {
 
-    override suspend fun scoreStreaming(prompt: String): Flow<String> = flow {
-        val chunks = emitChunks.coerceAtLeast(2)
-        val score = (forceScore ?: (80 + Random.nextInt(-10, 11))).coerceIn(0, 100)
-        for (i in 1..chunks) {
-            delay(perChunkDelayMs)
-            emit("chunk[$i] ")
-            if (simulateError && i == chunks / 2) {
-                error("Simulated error")
-            }
-        }
-        emit("""{"overall_score":$score} """)
-        emit("Score: $score / 100")
-    }
-}
-
-/* --- 実機推論（MediaPipe GenAI + InferenceModel のラッパー） --- */
-class MediaPipeRepository(
-    private val appContext: Context,
-    repoScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-) : Repository {
-
+    // Lazily obtain the shared inference model instance
     private val model by lazy { InferenceModel.getInstance(appContext) }
-
-    init {
-        repoScope.launch {
-            try {
-                model.ensureLoaded()
-            } catch (e: Throwable) {
-            }
-        }
-    }
 
     private fun wrapWithTurns(body: String): String {
         return """
             <start_of_turn>user
             ${body.trimIndent()}
+            STRICT OUTPUT (NO MARKDOWN):
+            - Entire output <512 chars.
+            - Return RAW JSON only. DO NOT use Markdown, code fences, or backticks.
+            - Output must be ONE LINE; first char '{', last char '}'.
+            - No explanations or extra text.
             <end_of_turn>
             <start_of_turn>model
         """.trimIndent()
     }
 
-    override suspend fun scoreStreaming(prompt: String): Flow<String> = callbackFlow {
 
-        val prompt = buildString { appendLine(wrapWithTurns(prompt)) }
 
-        val reqId = model.startRequest(prompt)
+    /**
+     * Start a scoring request and stream partial results as a Flow<String>.
+     *
+     * Note: the method remains `suspend` to preserve the original API shape.
+     * The returned Flow is cold; collection will trigger streaming.
+     */
+    override suspend fun request(prompt: String): Flow<String> = callbackFlow {
+        // Avoid shadowing the parameter name
+        val promptText = prompt
+        val fullPrompt = buildString { appendLine(wrapWithTurns(promptText)) }
 
-        val job = launch {
+        // Start request on the model and subscribe to partialResults matching reqId
+        val reqId = model.startRequest(fullPrompt)
+
+        // Launch a coroutine to collect partial results and forward to the callbackFlow
+        val collectJob = launch {
             model.partialResults
                 .filter { it.requestId == reqId }
                 .collect { pr ->
-                    trySend(pr.text) // 文字列の差分を UI へ
-                    if (pr.done) close() // ここで Flow を完了
+                    // Try to emit the partial text; if the channel is closed, ignore the result
+                    val sendResult = trySend(pr.text)
+                    if (!sendResult.isSuccess) {
+                        // Optionally log or handle backpressure / failure.
+                        // e.g. Log.w("MediaPipeRepository", "Failed to send partial result for $reqId")
+                    }
+
+                    // If this partial result indicates completion, close the flow
+                    if (pr.done) {
+                        // close() will terminate the callbackFlow and propagate completion to collectors
+                        close()
+                    }
                 }
         }
 
+        // Clean-up when the downstream collector cancels or stops collecting
         awaitClose {
-            model.cancelRequest(reqId)
-            job.cancel()
+            // Cancel the model request and the internal collecting job
+            try {
+                model.cancelRequest(reqId)
+            } catch (_: Throwable) {
+                // swallow cancellation exceptions from model.cancelRequest to avoid leaking
+            }
+            collectJob.cancel()
         }
     }
 }
-
