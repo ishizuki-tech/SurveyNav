@@ -70,8 +70,6 @@ class MediaPipeRepository(
 
     override suspend fun scoreStreaming(prompt: String): Flow<String> = callbackFlow {
 
-        //model.ensureLoaded()
-
         val prompt = buildString { appendLine(wrapWithTurns(prompt)) }
 
         val reqId = model.startRequest(prompt)

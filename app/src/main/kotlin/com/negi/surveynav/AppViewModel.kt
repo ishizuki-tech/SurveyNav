@@ -34,21 +34,21 @@ sealed class DlState {
     data class Error(val message: String) : DlState()
 }
 
-class HfAuthInterceptor(private val token: String) : Interceptor {
-    override fun intercept(chain: Interceptor.Chain): Response {
-        val req = chain.request()
-        val host = req.url.host
-        val b = req.newBuilder()
-            .header("User-Agent", "SurveyNav/1.0 (Android)")
-            .header("Accept", "application/octet-stream")
-        if (host.endsWith("huggingface.co") && token.isNotBlank()) {
-            b.header("Authorization", "Bearer $token")
-        }
-        return chain.proceed(b.build())
-    }
-}
-
 class AppViewModel() : ViewModel() {
+
+    class HfAuthInterceptor(private val token: String) : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val req = chain.request()
+            val host = req.url.host
+            val b = req.newBuilder()
+                .header("User-Agent", "SurveyNav/1.0 (Android)")
+                .header("Accept", "application/octet-stream")
+            if (host.endsWith("huggingface.co") && token.isNotBlank()) {
+                b.header("Authorization", "Bearer $token")
+            }
+            return chain.proceed(b.build())
+        }
+    }
 
     //val modelUrl = "https://huggingface.co/google/gemma-3n-E2B-it-litert-lm/resolve/main/gemma-3n-E2B-it-int4.litertlm"
     val modelUrl = "https://huggingface.co/google/gemma-3n-E4B-it-litert-lm/resolve/main/gemma-3n-E4B-it-int4.litertlm"
@@ -162,7 +162,7 @@ fun DownloadGate(
                     .padding(24.dp),
                 verticalArrangement = Arrangement.Center
             ) {
-                Text("モデルをダウンロード中…")
+                Text("Downloading the target SLM…")
                 Spacer(Modifier.height(12.dp))
                 if (pct != null) {
                     LinearProgressIndicator(
@@ -186,9 +186,9 @@ fun DownloadGate(
                     .padding(24.dp),
                 verticalArrangement = Arrangement.Center
             ) {
-                Text("ダウンロードに失敗しました: ${state.message}")
+                Text("Failed Download... : ${state.message}")
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onRetry) { Text("再試行") }
+                Button(onClick = onRetry) { Text("Retry.") }
             }
         }
 

@@ -28,7 +28,7 @@ import com.negi.surveynav.screens.SingleChoiceScreen
 import com.negi.surveynav.slm.InferenceModel
 import com.negi.surveynav.slm.MediaPipeRepository
 import com.negi.surveynav.slm.Repository
-import com.negi.surveynav.ui.AiScreen
+import com.negi.surveynav.screens.AiScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext

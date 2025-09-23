@@ -118,68 +118,6 @@ class InferenceModel private constructor(appCtx: Context) {
         }, 50, 50, TimeUnit.MILLISECONDS)
     }
 
-    /* ======================= Loading ======================= */
-    /**
-     * モデルをロード（path を渡すと切り替え対応）。GPU→CPU フォールバックあり。
-     * - 既に同じパスでロード済みなら何もしない
-     * - 異なるパスが来たら安全にクローズ→再初期化
-     */
-//    suspend fun ensureLoaded(path: String? = null) {
-//        // すでに OK か？
-//        if (loaded.get()) {
-//            if (path == null || path == loadedPath) return
-//            // 異なるパスなら再ロード
-//            loadMutex.withLock {
-//                if (path == loadedPath) return
-//                safelyCloseLlmOnMain()
-//                llm = null
-//                loaded.set(false)
-//                loadedPath = null
-//            }
-//        }
-//
-//        loadMutex.withLock {
-//            if (loaded.get()) return
-//
-//            val taskPath = path ?: withContext(Dispatchers.IO) {
-//                ensureModelPresent(appContext, MODEL_ASSET_NAME)
-//            }
-//
-//            try {
-//                withContext(Dispatchers.Main) {
-//                    // まず GPU
-//                    val gpuOpts = LlmInference.LlmInferenceOptions.builder()
-//                        .setModelPath(taskPath)
-//                        .setMaxTokens(MAX_TOKENS)
-//                        .setPreferredBackend(LlmInference.Backend.GPU)
-//                        .build()
-//                    try {
-//                        llm = LlmInference.createFromOptions(appContext, gpuOpts)
-//                        Log.i(TAG, "LlmInference(GPU) created: ${llm?.hashCode()} @ $taskPath")
-//                    } catch (gpuErr: Throwable) {
-//                        Log.w(TAG, "GPU backend failed, fallback to CPU", gpuErr)
-//                        val cpuOpts = LlmInference.LlmInferenceOptions.builder()
-//                            .setModelPath(taskPath)
-//                            .setMaxTokens(MAX_TOKENS)
-//                            .setPreferredBackend(LlmInference.Backend.CPU)
-//                            .build()
-//                        llm = LlmInference.createFromOptions(appContext, cpuOpts)
-//                        Log.i(TAG, "LlmInference(CPU) created: ${llm?.hashCode()} @ $taskPath")
-//                    }
-//                }
-//                loaded.set(true)
-//                loadedPath = taskPath
-//                Log.i(TAG, "InferenceModel: model loaded and ready (path=$taskPath)")
-//            } catch (e: Throwable) {
-//                Log.e(TAG, "Failed to initialize LlmInference", e)
-//                runCatching { llm?.close() }
-//                llm = null
-//                loaded.set(false)
-//                loadedPath = null
-//                throw e
-//            }
-//        }
-//    }
     suspend fun ensureLoaded(path: String? = null) {
         // すでにロード済み & パス一致なら即 return
         if (loaded.get() && (path == null || path == loadedPath)) return
@@ -194,12 +132,13 @@ class InferenceModel private constructor(appCtx: Context) {
                 loadedPath = null
             }
         }
-
         loadMutex.withLock {
-            if (loaded.get() && (path == null || path == loadedPath)) return
 
+            if (loaded.get() && (path == null || path == loadedPath)) return@withLock
+
+            val fileNameOrPath = path ?: MODEL_ASSET_NAME
             val taskPath = path ?: withContext(Dispatchers.IO) {
-                ensureModelPresent(appContext, MODEL_ASSET_NAME)
+                ensureModelPresent(appContext, fileNameOrPath)
             }
 
             try {
@@ -294,6 +233,7 @@ class InferenceModel private constructor(appCtx: Context) {
         temperature: Float = DEFAULT_TEMPERATURE,
         randomSeed: Int? = null
     ): String {
+
         val requestId = UUID.randomUUID().toString()
 
         Log.d(TAG, " ")

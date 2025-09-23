@@ -57,7 +57,7 @@ class SurveyViewModel(
 
     /* ---------- Graph from JSON ---------- */
     private val graph: Map<String, Node>
-    private val startId: String
+    private val startId: String = config.graph.startId
 
     private fun NodeDTO.toNode(): Node = Node(
         id = id,
@@ -236,9 +236,9 @@ class SurveyViewModel(
         this.mapValues { it.value.toList() }
 
     init {
-        startId = config.graph.startId
+
         graph = config.graph.nodes.associateBy { it.id }.mapValues { (_, dto) -> dto.toNode() }
-        // 初期ノード
+
         _currentNode.value = nodeOf(startId)
         nodeStack.addLast(startId)
         nav.add(navKeyFor(_currentNode.value))

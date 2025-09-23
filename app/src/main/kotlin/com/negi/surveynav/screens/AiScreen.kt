@@ -1,47 +1,37 @@
 // file: com/negi/surveynav/ui/AiScreens.kt
-package com.negi.surveynav.ui
+package com.negi.surveynav.screens
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.BottomAppBar
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.LocalTextStyle
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.negi.surveynav.AiViewModel
 import com.negi.surveynav.SurveyViewModel
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,14 +42,14 @@ fun AiScreen(
     onNext: () -> Unit,
     onBack: () -> Unit
 ) {
-    // ---- tools ----
+    // ----- helpers -----
     val keyboard = LocalSoftwareKeyboardController.current
-    val scroll = rememberScrollState()
+    val vScroll = rememberScrollState()
     val focusRequester = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
 
-    // ---- VM state ----
+    // ----- VM state -----
     val question by remember(vmSurvey, nodeId) { vmSurvey.questions.map { it[nodeId].orEmpty() } }
         .collectAsState(initial = vmSurvey.getQuestion(nodeId))
     val answer by remember(vmSurvey, nodeId) { vmSurvey.answers.map { it[nodeId].orEmpty() } }
@@ -72,23 +62,24 @@ fun AiScreen(
     val error by vmAI.error.collectAsState()
     val followupQuestion by vmAI.followupQuestion.collectAsState()
 
+    // ----- effects -----
     LaunchedEffect(nodeId) {
-        // 初回は回答欄にフォーカス
+        // Focus the answer field on first appearance
         focusRequester.requestFocus()
         keyboard?.show()
     }
     LaunchedEffect(error) { error?.let { snack.showSnackbar(it) } }
 
-    // ★ フォローアップが「生成された瞬間」に1回だけ記録 & 表示用に反映
+    // When a follow-up is produced (and loading is finished), record & display it once
     LaunchedEffect(followupQuestion, loading, nodeId) {
         val q = followupQuestion
         if (!loading && q != null) {
-            vmSurvey.addFollowupQuestion(nodeId, q)  // 質問の履歴に積む（未回答）
-            vmSurvey.setQuestion(q, nodeId)          // 表示中の質問を更新
+            vmSurvey.addFollowupQuestion(nodeId, q)
+            vmSurvey.setQuestion(q, nodeId)
         }
     }
 
-    // ★ 送信時は回答だけを直近の未回答フォローアップに紐づける
+    // Kick off evaluation
     fun startEvaluation(curQuestion: String, curAnswer: String) {
         if (curAnswer.isBlank() || loading) return
         vmSurvey.answerLastFollowup(nodeId, curAnswer)
@@ -97,12 +88,13 @@ fun AiScreen(
         }
     }
 
+    // Typography for dense UI
+    val smallStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 14.sp)
+
     Scaffold(
         containerColor = Color.Transparent,
         topBar = {
-            TopAppBar(
-                title = { Text("Question Eval. $nodeId", style = LocalTextStyle.current) }
-            )
+            TopAppBar(title = { Text("Question Eval. $nodeId", style = smallStyle) })
         },
         bottomBar = {
             BottomAppBar(containerColor = Color.Transparent) {
@@ -110,12 +102,11 @@ fun AiScreen(
                     onClick = {
                         vmAI.resetStates()
                         onBack()
-                    },
-                    enabled = true
-                ) {
-                    Text("Back", style = LocalTextStyle.current)
-                }
+                    }
+                ) { Text("Back", style = smallStyle) }
+
                 Spacer(Modifier.weight(1f))
+
                 Button(
                     onClick = {
                         focusRequester.freeFocus()
@@ -124,34 +115,30 @@ fun AiScreen(
                     },
                     enabled = answer.isNotBlank() && !loading
                 ) {
-                    Text(if (score == null) "Submit" else "Retry", style = LocalTextStyle.current)
+                    Text(if (score == null) "Submit" else "Retry", style = smallStyle)
                 }
+
                 Spacer(Modifier.weight(1f))
+
                 OutlinedButton(
                     onClick = {
                         vmAI.resetStates()
                         onNext()
-                    },
-                    enabled = true
-                ) { Text("Next", style = LocalTextStyle.current) }
+                    }
+                ) { Text("Next", style = smallStyle) }
             }
         },
         snackbarHost = { SnackbarHost(snack) }
     ) { pad ->
-
-        val smallStyle = MaterialTheme.typography.bodySmall.copy(
-            fontSize = 11.sp, lineHeight = 14.sp
-        )
-
         CompositionLocalProvider(LocalTextStyle provides smallStyle) {
             Column(
                 Modifier
                     .padding(pad)
                     .padding(20.dp)
-                    .verticalScroll(scroll)
                     .fillMaxSize()
+                    .verticalScroll(vScroll) // single vertical scroller for the whole screen
             ) {
-                // フォローアップの質問は読み取り専用（誤編集防止）
+                // Read-only follow-up question (avoid accidental edits)
                 OutlinedTextField(
                     value = question,
                     onValueChange = { /* readOnly */ },
@@ -161,6 +148,7 @@ fun AiScreen(
                     label = { Text("Question", style = LocalTextStyle.current) },
                 )
 
+                // User answer
                 OutlinedTextField(
                     value = answer,
                     onValueChange = { vmSurvey.setAnswer(it, nodeId) },
@@ -170,8 +158,6 @@ fun AiScreen(
                     minLines = 5,
                     textStyle = LocalTextStyle.current,
                     label = { Text("Your answer", style = LocalTextStyle.current) },
-                    // keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    // keyboardActions = KeyboardActions(onDone = { startEvaluation(question, answer) })
                 )
 
                 Spacer(Modifier.height(16.dp))
@@ -181,30 +167,132 @@ fun AiScreen(
                     Spacer(Modifier.height(8.dp))
                 }
 
+                // Result area: JSON (pretty) or streaming text fallback
                 if (!raw.isNullOrBlank()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text("Response from SLM.", style = LocalTextStyle.current)
-                    Spacer(Modifier.height(4.dp))
-                    Surface(tonalElevation = 1.dp, modifier = Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(7.dp)) {
-                            Text(raw!!)
+                    val json = remember {
+                        Json {
+                            prettyPrint = true
+                            prettyPrintIndent = "  "
+                            ignoreUnknownKeys = true
                         }
                     }
+                    val pretty = remember(raw) { prettyOrRaw(json, raw!!) }
+
+                    JsonCard(pretty = pretty, score = score)
                 } else {
-                    // 途中経過（stream）は loading 中に更新され続ける
-                    Text("AI出力（ライブ）", style = LocalTextStyle.current)
+                    Text("Output From SLM.")
                     Spacer(Modifier.height(6.dp))
                     Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(12.dp)) {
-                            Text(if (stream.isBlank()) "出力待ち…" else stream)
-                            if (score != null) {
-                                Spacer(Modifier.height(8.dp))
-                                Text("Score: $score / 100")
-                            }
+                            Text(if (stream.isBlank()) "Waiting for response …" else stream)
                         }
                     }
                 }
             }
         }
     }
+}
+
+/* -------------------------------- Helpers -------------------------------- */
+
+@Composable
+private fun JsonCard(
+    pretty: String,
+    score: Int?
+) {
+    // Horizontal scroll only (parent column already controls vertical scroll)
+    val hScroll = rememberScrollState()
+
+    Box(Modifier.fillMaxWidth()) {
+        Surface(
+            tonalElevation = 1.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                .padding(4.dp)
+                .horizontalScroll(hScroll)
+        ) {
+            SelectionContainer {
+                Column(Modifier.padding(8.dp)) {
+                    Text(
+                        text = pretty,
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 18.sp
+                    )
+                    if (score != null) {
+                        Spacer(Modifier.height(6.dp))
+                        Text("Score: $score / 100")
+                    }
+                }
+            }
+        }
+
+        // Overlay a lightweight horizontal scrollbar when scrollable
+        val showBar by remember { derivedStateOf { hScroll.maxValue > 0 } }
+        if (showBar) {
+            HorizontalScrollbar(
+                scrollState = hScroll,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        }
+    }
+}
+
+/**
+ * Pretty print JSON; if parsing fails, return the original raw string.
+ */
+private fun prettyOrRaw(json: Json, raw: String): String =
+    runCatching {
+        json.encodeToString(kotlinx.serialization.json.Json.parseToJsonElement(raw))
+    }.getOrElse { raw }
+
+/* --------------------------- Horizontal Scrollbar -------------------------- */
+
+@Composable
+private fun HorizontalScrollbar(
+    scrollState: androidx.compose.foundation.ScrollState,
+    modifier: Modifier = Modifier,
+    thickness: Dp = 3.dp,
+    thumbMinWidth: Dp = 24.dp,
+) {
+    val radius = thickness / 2
+    val density = LocalDensity.current
+    var viewportPx by remember { mutableStateOf(0) }
+
+    // ★ Composable な値は drawWithContent の外で評価してキャプチャ
+    val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
+    val thumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+
+    Box(
+        modifier
+            .height(thickness)
+            .fillMaxWidth()
+            .background(trackColor, RoundedCornerShape(radius))
+            .onGloballyPositioned { viewportPx = it.size.width }
+            .drawWithContent {
+                drawContent()
+
+                val max = scrollState.maxValue // contentWidth - viewportWidth
+                if (viewportPx <= 0 || max <= 0) return@drawWithContent
+
+                val viewport = viewportPx.toFloat()
+                val content = viewport + max
+                val thumbW = (viewport * viewport / content)
+                    .coerceAtLeast(with(density) { thumbMinWidth.toPx() })
+                    .coerceAtMost(viewport)
+
+                val progress = scrollState.value.toFloat() / max
+                val trackW = viewport - thumbW
+                val thumbX = trackW * progress
+
+                drawRoundRect(
+                    color = thumbColor,
+                    topLeft = Offset(thumbX, 0f),
+                    size = Size(thumbW, size.height),
+                    cornerRadius = CornerRadius(with(density) { radius.toPx() })
+                )
+            }
+    )
 }

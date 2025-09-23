@@ -1,0 +1,395 @@
+//// file: app/src/androidTest/java/com/negi/navsurvey/ExampleInstrumentedTest.kt
+//package com.negi.navsurvey
+//
+//import android.content.Context
+//import android.util.Log
+//import androidx.test.core.app.ApplicationProvider
+//import androidx.test.ext.junit.runners.AndroidJUnit4
+//import androidx.test.platform.app.InstrumentationRegistry
+//import com.negi.utils.FollowupExtractor
+//import com.negi.utils.InferenceModel
+//import kotlinx.coroutines.CancellationException
+//import kotlinx.coroutines.Dispatchers
+//import kotlinx.coroutines.flow.Flow
+//import kotlinx.coroutines.flow.filter
+//import kotlinx.coroutines.flow.filterIsInstance
+//import kotlinx.coroutines.flow.onEach
+//import kotlinx.coroutines.runBlocking
+//import kotlinx.coroutines.sync.Mutex
+//import kotlinx.coroutines.sync.withLock
+//import kotlinx.coroutines.withContext
+//import kotlinx.coroutines.withTimeout
+//import org.json.JSONArray
+//import org.json.JSONObject
+//import org.junit.*
+//import org.junit.Assert.assertTrue
+//import org.junit.runner.RunWith
+//import java.io.File
+//
+///**
+// * Instrumented tests for a MediaPipe GenAI (LiteRt) based InferenceModel.
+// *
+// * - Model is staged once in @BeforeClass and loaded on real time.
+// * - Requests are serialized to avoid native contention.
+// * - Output is strict ONE-LINE JSON; fallback heuristic extractor if needed.
+// *
+// * NOTE: For stability, prefer sticky session reuse on the InferenceModel side
+// *       (e.g., do not eagerly delete sessions between calls).
+// */
+//@RunWith(AndroidJUnit4::class)
+//class ExampleInstrumentedTest {
+//
+//    companion object {
+//        private const val TAG = "ExampleInstrumentedTest"
+//        private const val FOLLOWUP_TAG = "FollowupInstrumentedTest"
+//
+//        // Change if your staged filename differs.
+//        private const val MODEL_NAME = "gemma-3n-E4B-it-int4.litertlm"
+//
+//        // Tune per device
+//        private const val LOAD_TIMEOUT_MS = 120_000L
+//        private const val STREAM_TIMEOUT_MS = 120_000L
+//        private const val MAX_RAW_LOG_CHARS = 600
+//
+//        private lateinit var appContext: Context
+//        private lateinit var model: InferenceModel
+//        private lateinit var modelPath: String
+//
+//        // Serialize all requests during tests
+//        private val singleRunMutex = Mutex()
+//
+//        /** Prepare model file in filesDir and load once. */
+//        @JvmStatic
+//        @BeforeClass
+//        fun beforeAll() {
+//            appContext = ApplicationProvider.getApplicationContext()
+//            model = InferenceModel.getInstance(appContext)
+//
+//            val file = ensureModelPresent(appContext)
+//            modelPath = file.absolutePath
+//
+//            Log.i(TAG, "filesDir = ${appContext.filesDir.absolutePath}")
+//            Log.i(TAG, "model    = ${file.absolutePath} (${file.length()} bytes)")
+//
+//            // Initial load on real-time dispatcher
+//            runBlocking {
+//                withTimeout(LOAD_TIMEOUT_MS) {
+//                    model.ensureLoaded(modelPath)
+//                }
+//            }
+//        }
+//
+//        @JvmStatic
+//        @AfterClass
+//        fun afterAll() {
+//            try { model.close() } catch (_: Throwable) { /* no-op */ }
+//        }
+//
+//        /**
+//         * Ensure model exists under filesDir.
+//         * Priority:
+//         *  1) Already in filesDir
+//         *  2) Copy from Instrumentation arg `modelPath`
+//         *  3) Copy from /data/local/tmp/<MODEL_NAME>
+//         */
+//        private fun ensureModelPresent(ctx: Context): File {
+//            val dst = File(ctx.filesDir, MODEL_NAME)
+//            if (dst.exists() && dst.length() > 0L) {
+//                require(dst.canRead()) { "Model not readable: ${dst.absolutePath}" }
+//                return dst
+//            }
+//
+//            val args = InstrumentationRegistry.getArguments()
+//            args.getString("modelPath")?.let { path ->
+//                val src = File(path)
+//                require(src.exists() && src.length() > 0L) { "modelPath not found or empty: $path" }
+//                src.inputStream().use { ins ->
+//                    dst.outputStream().use { outs -> ins.copyTo(outs) }
+//                }
+//                require(dst.exists() && dst.length() > 0L) { "Failed to copy from modelPath" }
+//                require(dst.canRead()) { "Model not readable after copy: ${dst.absolutePath}" }
+//                return dst
+//            }
+//
+//            val tmp = File("/data/local/tmp/$MODEL_NAME")
+//            if (tmp.exists() && tmp.length() > 0L) {
+//                tmp.inputStream().use { ins ->
+//                    dst.outputStream().use { outs -> ins.copyTo(outs) }
+//                }
+//            }
+//
+//            require(dst.exists() && dst.length() > 0L) {
+//                "Model not found: ${dst.absolutePath}. " +
+//                        "Provide via -P android.testInstrumentationRunnerArguments.modelPath=/abs/path " +
+//                        "or adb push $MODEL_NAME /data/local/tmp/ and rerun."
+//            }
+//            require(dst.canRead()) { "Model not readable: ${dst.absolutePath}" }
+//            return dst
+//        }
+//
+//        // ---------------- Flow helpers ----------------
+//
+//        // Internal exception to end collection inclusively on done=true
+//        private class Done(val reason: String = "stream done") : CancellationException(reason)
+//
+//        // takeUntilInclusive for Flow
+//        private inline fun <T> Flow<T>.takeUntilInclusive(
+//            crossinline predicate: (T) -> Boolean
+//        ): Flow<T> = onEach { value -> if (predicate(value)) throw Done() }
+//
+//        /**
+//         * Collect chunks for the given requestId until done=true, using real time.
+//         */
+//        private suspend fun awaitCompletion(
+//            requestId: String,
+//            timeoutMs: Long = STREAM_TIMEOUT_MS
+//        ): Pair<String, List<InferenceModel.PartialResult>> =
+//            withContext(Dispatchers.Default.limitedParallelism(1)) {
+//                withTimeout(timeoutMs) {
+//                    val chunks = mutableListOf<InferenceModel.PartialResult>()
+//                    try {
+//                        model.partialResults
+//                            .filterIsInstance<InferenceModel.PartialResult>()
+//                            .filter { it.requestId == requestId }
+//                            .onEach { pr -> chunks += pr }
+//                            .takeUntilInclusive { pr -> pr.done }
+//                            .collect { /* accumulated by onEach */ }
+//                    } catch (_: Done) { /* normal completion */ }
+//                    val combined = buildString { chunks.forEach { append(it.text.orEmpty()) } }
+//                    combined to chunks
+//                }
+//            }
+//
+//        // ---------------- Prompt helpers ----------------
+//
+//        private fun wrapWithTurns(body: String): String = """
+//            <start_of_turn>user
+//            ${body.trimIndent()}
+//            <end_of_turn>
+//            <start_of_turn>model
+//        """.trimIndent()
+//
+//        private fun renderTemplate(template: String, vars: Map<String, String>): String {
+//            return Regex("\\{\\{\\s*([A-Z0-9_]+)\\s*\\}\\}")
+//                .replace(template) { m -> vars[m.groupValues[1]] ?: m.value }
+//                .trim()
+//        }
+//
+//        private fun getPrompt(question: String, answer: String): String {
+//            Log.i(FOLLOWUP_TAG, " Question ::: $question")
+//            Log.i(FOLLOWUP_TAG, " Answer   ::: $answer")
+//
+//            val tpl = """
+//                You are a concise English survey expert. Read the Question and the Answer.
+//
+//                Produce STRICT ONE-LINE JSON with EXACT keys:
+//                - "analysis": string (brief)
+//                - "expected answer": string
+//                - "follow-up questions": array of EXACTLY 3 strings
+//                - "score": integer 0-100
+//
+//                HARD RULES:
+//                - One single line. First char '{', last '}'.
+//                - No markdown, no code fences, no extra keys.
+//                - Keep total under 512 characters.
+//
+//                EXAMPLE (ONE LINE):
+//                {"analysis":"brief","expected answer":"<answer>","follow-up questions":["Q1","Q2","Q3"],"score":87}
+//
+//                Question: {{QUESTION}}
+//                Answer: {{ANSWER}}
+//            """.trimIndent()
+//
+//            return renderTemplate(
+//                tpl,
+//                mapOf("QUESTION" to question.trim(), "ANSWER" to answer.trim())
+//            )
+//        }
+//
+//        // ---------------- Output parsing ----------------
+//
+//        private fun parseFollowupsFromJsonStrict(raw: String): List<String>? {
+//            val one = raw.trim().replace(Regex("\\s+"), " ")
+//            if (!(one.startsWith("{") && one.endsWith("}"))) return null
+//            return try {
+//                val obj = JSONObject(one)
+//                val arr: JSONArray = obj.getJSONArray("follow-up questions")
+//                val list = mutableListOf<String>()
+//                for (i in 0 until arr.length()) {
+//                    val s = arr.getString(i).trim()
+//                    if (s.isNotEmpty()) list += s
+//                }
+//                if (list.isNotEmpty()) list.take(3) else null
+//            } catch (_: Throwable) {
+//                null
+//            }
+//        }
+//
+//        private fun extractFollowupQuestions(rawText: String): List<String> {
+//            val strict = parseFollowupsFromJsonStrict(rawText)
+//            if (strict != null) return strict.take(3)
+//            val fx = FollowupExtractor.fromRaw(rawText, max = 3)
+//            if (fx.size != 3) {
+//                Log.w(
+//                    FOLLOWUP_TAG,
+//                    "Heuristic extracted ${fx.size} followups (expected 3). raw='${rawText.take(MAX_RAW_LOG_CHARS)}...'"
+//                )
+//            }
+//            return fx
+//        }
+//
+//        /** Ensure loaded (idempotent, real time) and run a single request to completion. */
+//        private suspend fun startAndAwait(body: String): Pair<String, List<InferenceModel.PartialResult>> =
+//            singleRunMutex.withLock {
+//                withContext(Dispatchers.Default.limitedParallelism(1)) {
+//                    withTimeout(LOAD_TIMEOUT_MS / 2) { model.ensureLoaded(modelPath) }
+//                    val requestId = model.startRequest(body)
+//                    awaitCompletion(requestId)
+//                }
+//            }
+//    }
+//
+//    data class QACase(
+//        val question: String,
+//        val answer: String,
+//        val expectedStatus: String,   // informational (not asserted)
+//        val expectedFollowup: String  // informational (not asserted)
+//    )
+//
+//    // Optional extra guard: ensure loaded before each test (idempotent)
+//    @Before
+//    fun setup() {
+//        runBlocking {
+//            withTimeout(LOAD_TIMEOUT_MS / 2) {
+//                ExampleInstrumentedTest.model.ensureLoaded(ExampleInstrumentedTest.modelPath)
+//            }
+//        }
+//    }
+//
+//    // --------------- Tests ---------------
+//
+//    @Test
+//    fun validateEarlyMaturitySetWithQAMatcher() {
+//        runBlocking {
+//            val cases = listOf(
+//                QACase(
+//                    question = "What would you consider to be an early maturing maize variety?",
+//                    answer   = "A maize variety that matures in 90 days",
+//                    expectedStatus   = "Complete",
+//                    expectedFollowup = ""
+//                ),
+//                QACase(
+//                    question = "What would you consider to be an early maturing maize variety?",
+//                    answer   = "Variety that i can harvest before short rains end in my area",
+//                    expectedStatus   = "Incomplete",
+//                    expectedFollowup = "When do short rains start and end in your area?"
+//                ),
+//                QACase(
+//                    question = "What would you consider to be an early maturing maize variety?",
+//                    answer   = "One that allows me to plant another crop in the same season",
+//                    expectedStatus   = "Incomplete",
+//                    expectedFollowup = "How many days should this variety take to mature to allow you to plant another crop in the same season?"
+//                ),
+//                QACase(
+//                    question = "What would you consider to be an early maturing maize variety?",
+//                    answer   = "Variety that i can harvest before pest destroy it",
+//                    expectedStatus   = "Incomplete",
+//                    expectedFollowup = "Within how many days does the maize need to mature to avoid being damaged by those pests?"
+//                ),
+//                QACase(
+//                    question = "What would you consider to be an early maturing maize variety?",
+//                    answer   = "Any variety that matures within 3 months",
+//                    expectedStatus   = "Complete",
+//                    expectedFollowup = ""
+//                ),
+//                QACase(
+//                    question = "How long does the maize you currently grow take to mature?",
+//                    answer   = "It takes 90 days from planting to harvesting",
+//                    expectedStatus   = "Complete",
+//                    expectedFollowup = ""
+//                ),
+//                QACase(
+//                    question = "How long does the maize you currently grow take to mature?",
+//                    answer   = "It takes around 3 to 4 months depending on the rains",
+//                    expectedStatus   = "Incomplete",
+//                    expectedFollowup = "In most occassions, does the variety take 3 months or 4 months to mature?"
+//                ),
+//                QACase(
+//                    question = "How long does the maize you currently grow take to mature?",
+//                    answer   = "It doesn’t take too long, maybe a few months",
+//                    expectedStatus   = "Incomplete",
+//                    expectedFollowup = "Could you please estimate the number of days it takes to mature?"
+//                ),
+//                QACase(
+//                    question = "How long does the maize you currently grow take to mature?",
+//                    answer   = "I’m not sure, I just harvest when it’s ready",
+//                    expectedStatus   = "Incomplete",
+//                    expectedFollowup = "In most cases, after how long is it usually ready? How many days or month?"
+//                ),
+//                QACase(
+//                    question = "How long does the maize you currently grow take to mature?",
+//                    answer   = "it takes too long, sometimes more than half of the year",
+//                    expectedStatus   = "Complete",
+//                    expectedFollowup = ""
+//                ),
+//                QACase(
+//                    question = "How much yield would you give up for harvesting earlier?",
+//                    answer   = "I would accept loosing 10% of my yield to harvest earlier",
+//                    expectedStatus   = "Complete",
+//                    expectedFollowup = ""
+//                ),
+//                QACase(
+//                    question = "How much yield would you give up for harvesting earlier?",
+//                    answer   = "I wouldn't give up any yield, I would rather harvest late",
+//                    expectedStatus   = "Complete",
+//                    expectedFollowup = ""
+//                ),
+//                QACase(
+//                    question = "How much yield would you give up for harvesting earlier?",
+//                    answer   = "Loosing 1 to 2 bags is okay for more so long i escape the dry spell",
+//                    expectedStatus   = "Complete",
+//                    expectedFollowup = ""
+//                ),
+//                QACase(
+//                    question = "How much yield would you give up for harvesting earlier?",
+//                    answer   = "I would only give up a little of my harvest",
+//                    expectedStatus   = "Incomplete",
+//                    expectedFollowup = "How much is a little? Can you estimate the quantity in bags or percentage of your harvest"
+//                ),
+//                QACase(
+//                    question = "How much yield would you give up for harvesting earlier?",
+//                    answer   = "I could give up about one bag per acre",
+//                    expectedStatus   = "Complete",
+//                    expectedFollowup = ""
+//                )
+//            )
+//
+//            cases.forEachIndexed { idx, tc ->
+//                Log.w(TAG, "===================================================")
+//                Log.w(TAG, "[${idx + 1}/${cases.size}] Question='${tc.question}'")
+//                Log.w(TAG, "[${idx + 1}/${cases.size}] Answer  ='${tc.answer}'")
+//
+//                val (response, chunks) = startAndAwait(
+//                    wrapWithTurns(
+//                        getPrompt(
+//                            question = tc.question,
+//                            answer = tc.answer
+//                        )
+//                    )
+//                )
+//
+//                val rawShort = response.take(MAX_RAW_LOG_CHARS)
+//                Log.i(TAG, "first chunk: '${chunks.firstOrNull()?.text.orEmpty().take(80)}'")
+//                Log.i(TAG, "raw response: '${rawShort}${if (response.length > MAX_RAW_LOG_CHARS) "..." else ""}'")
+//
+//                val followup = extractFollowupQuestions(response)
+//                Log.i(FOLLOWUP_TAG, "Followup Questions ::: $followup")
+//
+//                // Basic assertions (format laxity handled by extractor fallback)
+//                assertTrue("no chunks emitted", chunks.isNotEmpty())
+//                assertTrue("empty response", response.isNotBlank())
+//            }
+//            Log.w(TAG, "===================================================")
+//        }
+//    }
+//}
