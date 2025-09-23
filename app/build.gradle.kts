@@ -61,12 +61,14 @@ android {
 
 dependencies {
 
-    implementation(libs.firebase.crashlytics.buildtools)
-    implementation(libs.androidx.lifecycle.viewmodel.navigation3.android)
     // Compose BOM（バージョンはそのままでもOK。将来あげる時は一括で）
     val composeBom = platform("androidx.compose:compose-bom:2025.09.00")
+
     implementation(composeBom)
     androidTestImplementation(composeBom)
+
+    implementation(libs.firebase.crashlytics.buildtools)
+    implementation(libs.androidx.lifecycle.viewmodel.navigation3.android)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.okhttp)
     implementation(libs.mediapipe.tasks.text)
