@@ -1,0 +1,34 @@
+{
+  "prompt": {
+    "template": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Write a brief analysis of weaknesses in the answer.\n- Provide a strong expected answer to the question.\n- Ask EXACTLY 3 follow-up questions for the question.\n- Score how well the answer matches the question from 1–100 (integer).\n\nOUTPUT RULES:\n- In English.\n- Keys: \"analysis\" (string), \"expected answer\", \"follow-up questions\" (array of 3 strings), \"score\" (int 0-100).\n- Entire output <512 chars.\n\nSTRICT OUTPUT (NO MARKDOWN):\n- Return RAW JSON only. DO NOT use Markdown, code fences, or backticks.\n- Output must be ONE LINE; first char '{', last char '}'.\n- No explanations or extra text.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n",
+    "language": "en",
+  },
+
+  "prompt": {
+      "template": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Write a brief analysis of weaknesses in the answer.\n- Provide a strong expected answer to the question.\n- Ask EXACTLY 3 follow-up questions for the question.\n- Score how well the answer matches the question from 1–100 (integer).\n\nOUTPUT RULES:\n- In English.\n- Keys: \"analysis\" (string), \"expected answer\", \"follow-up questions\" (array of 3 strings), \"score\" (int 0-100).\n- Entire output <512 chars.\n\nSTRICT OUTPUT (NO MARKDOWN):\n- Return RAW JSON only. DO NOT use Markdown, code fences, or backticks.\n- Output must be ONE LINE; first char '{', last char '}'.\n- No explanations or extra text.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n",
+      "language": "en",
+      "rules": []
+    },
+
+  "prompts": [
+    {"nodeId":"Q1","prompt":"You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer (1-2 short sentences).\n- Provide a concise strong expected answer that directly addresses the question (format: single integer days or a small range like \"80-95\").\n- Ask EXACTLY 3 targeted follow-up questions to clarify region/conditions/definition of \"early\".\n- Score match 1-100 (integer).\n\nOUTPUT RULES:\n- In English; raw JSON only; single line; <512 chars.\n- Keys: \"analysis\", \"expected answer\", \"follow-up questions\" (array of 3 strings), \"score\" (int).\n\nQuestion: What do you consider an early-maturing maize variety? Please answer in days to maturity.\nAnswer: {{ANSWER}}"},
+    {"nodeId":"Q2","prompt":"You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly critique weaknesses in the respondent's answer (1-2 short sentences).\n- Provide a clear expected answer (single integer days or range) and note if seasonal variation matters.\n- Ask EXACTLY 3 follow-ups that probe how the respondent measured days (planting date definition, typical season, sample size).\n- Score 1-100 (integer).\n\nOUTPUT RULES:\n- In English; raw JSON only; single line; <512 chars; keys: \"analysis\",\"expected answer\",\"follow-up questions\"(3),\"score\".\n\nQuestion: In most seasons, how many days does your current maize variety take from planting to harvest?\nAnswer: {{ANSWER}}"},
+    {"nodeId":"Q3","prompt":"You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Point out weaknesses in the answer (1-2 sentences).\n- Provide a short expected answer (month name or month + explanation like \"Late October\").\n- Ask EXACTLY 3 follow-ups that clarify calendar system (which months), local climate, and what 'consider it early' means.\n- Score 1-100.\n\nOUTPUT RULES:\n- In English; raw JSON only; single line; <512 chars. Keys: \"analysis\",\"expected answer\",\"follow-up questions\"(3),\"score\".\n\nQuestion: During the short rains in your area, by which calendar month would you need to harvest to consider it early?\nAnswer: {{ANSWER}}"},
+    {"nodeId":"Q4","prompt":"You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly identify weaknesses in the answer (1-2 sentences).\n- Provide a concise expected answer (accept either percentage e.g. \"10%\" or absolute unit e.g. \"2 bags/acre\") and state which unit is preferred.\n- Ask EXACTLY 3 follow-ups that clarify unit preference, baseline yield, and risk tolerance.\n- Score 1-100.\n\nOUTPUT RULES:\n- In English; raw JSON only; single line; <512 chars. Keys: \"analysis\",\"expected answer\",\"follow-up questions\"(3),\"score\".\n\nQuestion: What maximum yield loss would you accept to harvest earlier—percentage or bags per acre?\nAnswer: {{ANSWER}}"},
+    {"nodeId":"Q5","prompt":"You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly critique the answer's weaknesses (1-2 sentences).\n- Provide a concise expected answer naming two prioritized factors (comma-separated, e.g. \"drought escape, market timing\") and a 1-sentence rationale.\n- Ask EXACTLY 3 follow-ups that probe trade-offs, ranking, and context (market vs. agronomy).\n- Score 1-100.\n\nOUTPUT RULES:\n- In English; raw JSON only; single line; <512 chars. Keys: \"analysis\",\"expected answer\",\"follow-up questions\"(3),\"score\".\n\nQuestion: When choosing an early-maturing variety, which two factors matter most? (e.g., drought escape, pest escape, double-cropping, market timing)\nAnswer: {{ANSWER}}"}
+  ],
+  "graph": {
+    "startId": "Start",
+    "nodes": [
+      { "id": "Start", "type": "START", "title": "Start", "question": "Start", "nextId": "Q1" },
+      { "id": "Q1", "type": "AI", "title": "Early Maturity (Days)", "question": "What do you consider an early-maturing maize variety? Please answer in days to maturity.", "nextId": "Q2" },
+      { "id": "Q2", "type": "AI", "title": "Current Variety DTM", "question": "In most seasons, how many days does your current maize variety take from planting to harvest?", "nextId": "Q3" },
+      { "id": "Q3", "type": "AI", "title": "Short Rains Deadline", "question": "During the short rains in your area, by which calendar month would you need to harvest to consider it early?", "nextId": "Q4" },
+      { "id": "Q4", "type": "AI", "title": "Yield Trade-off", "question": "What maximum yield loss would you accept to harvest earlier—percentage or bags per acre?", "nextId": "Q5" },
+      { "id": "Q5", "type": "AI", "title": "Top Factors", "question": "When choosing an early-maturing variety, which two factors matter most? (e.g., drought escape, pest escape, double-cropping, market timing)", "nextId": "Review" },
+      { "id": "Review", "type": "REVIEW", "title": "Review", "question": "", "nextId": "Done" },
+      { "id": "Done", "type": "DONE", "title": "Done", "question": "" }
+    ]
+  }
+}
+

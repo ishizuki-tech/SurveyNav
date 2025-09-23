@@ -25,8 +25,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.negi.surveynav.SurveyViewModel
-import com.negi.surveynav.UiEvent
+import com.negi.surveynav.vm.SurveyViewModel
+import com.negi.surveynav.vm.UiEvent
 
 @Composable
 fun MultiChoiceScreen(

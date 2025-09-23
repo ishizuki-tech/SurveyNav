@@ -1,5 +1,5 @@
 // file: com/negi/surveynav/SurveyViewModel.kt
-package com.negi.surveynav
+package com.negi.surveynav.vm
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.Serializable
+import kotlin.collections.iterator
 
 private const val TAG = "SurveyVM"
 
@@ -145,9 +146,12 @@ class SurveyViewModel(
         }
     }
 
-    /* ---------- Prompt (from JSON template) ---------- */
+    /* ---------- Prompt (from prompts list) ---------- */
     fun getPrompt(nodeId: String, question: String, answer: String): String {
-        val tpl = config.prompt.template
+        // Find template for the given nodeId from config.prompts
+        val tpl = config.prompts.firstOrNull { it.nodeId == nodeId }?.prompt
+            ?: throw IllegalArgumentException("No prompt defined for nodeId=$nodeId")
+
         return renderTemplate(
             tpl,
             mapOf(
@@ -158,14 +162,15 @@ class SurveyViewModel(
         )
     }
 
+    /**
+     * Simple template renderer replacing placeholders like {{KEY}} (whitespace tolerant).
+     */
     private fun renderTemplate(template: String, vars: Map<String, String>): String {
-        // {{VARNAME}} を置換（未定義はそのまま）
-        return Regex("\\{\\{\\s*([A-Z0-9_]+)\\s*\\}\\}")
-            .replace(template) { m ->
-                val key = m.groupValues[1]
-                vars[key] ?: m.value
-            }
-            .trim()
+        var out = template
+        for ((k, v) in vars) {
+            out = out.replace(Regex("\\{\\{\\s*$k\\s*\\}\\}"), v)
+        }
+        return out
     }
 
     /* ============================================================

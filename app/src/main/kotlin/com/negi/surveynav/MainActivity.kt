@@ -15,11 +15,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.*
 import androidx.navigation3.ui.NavDisplay
 import androidx.navigation3.ui.rememberSceneSetupNavEntryDecorator
+import com.negi.surveynav.config.SurveyConfigLoader
 import com.negi.surveynav.screens.DoneScreen
 import com.negi.surveynav.screens.IntroScreen
 import com.negi.surveynav.screens.MultiChoiceScreen
@@ -29,6 +31,19 @@ import com.negi.surveynav.slm.InferenceModel
 import com.negi.surveynav.slm.MediaPipeRepository
 import com.negi.surveynav.slm.Repository
 import com.negi.surveynav.screens.AiScreen
+import com.negi.surveynav.vm.AiViewModel
+import com.negi.surveynav.vm.AppViewModel
+import com.negi.surveynav.vm.DlState
+import com.negi.surveynav.vm.DownloadGate
+import com.negi.surveynav.vm.FlowAI
+import com.negi.surveynav.vm.FlowDone
+import com.negi.surveynav.vm.FlowHome
+import com.negi.surveynav.vm.FlowMulti
+import com.negi.surveynav.vm.FlowReview
+import com.negi.surveynav.vm.FlowSingle
+import com.negi.surveynav.vm.FlowText
+import com.negi.surveynav.vm.NodeType
+import com.negi.surveynav.vm.SurveyViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -42,9 +57,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             MaterialTheme {
-                Scaffold(Modifier.fillMaxSize()) { _ ->
-                    AppNav()
-                }
+                AppNav()
             }
         }
     }
@@ -57,8 +70,8 @@ class MainActivity : ComponentActivity() {
  * ============================================================ */
 @Composable
 fun InitGate(
-    key: Any? = Unit,
     modifier: Modifier = Modifier,
+    key: Any? = Unit,
     init: suspend () -> Unit,
     progressText: String = "Initializing…",
     onErrorMessage: (Throwable) -> String = { it.message ?: "Initialization failed" },
@@ -145,7 +158,7 @@ fun AppNav() {
             val backStack = rememberNavBackStack(FlowHome)
 
             val config = remember(appContext) {
-                com.negi.surveynav.config.SurveyConfigLoader.fromAssets(
+                SurveyConfigLoader.fromAssets(
                     context = appContext,
                     fileName = "survey_config.json"
                 )
@@ -154,7 +167,7 @@ fun AppNav() {
             val repo: Repository = remember(appContext) { MediaPipeRepository(appContext) }
 
             val vmSurvey: SurveyViewModel = viewModel(
-                factory = object : androidx.lifecycle.ViewModelProvider.Factory {
+                factory = object : ViewModelProvider.Factory {
                     @Suppress("UNCHECKED_CAST")
                     override fun <T : ViewModel> create(modelClass: Class<T>): T =
                         SurveyViewModel(nav = backStack, config = config) as T
@@ -162,7 +175,7 @@ fun AppNav() {
             )
 
             val vmAI: AiViewModel = viewModel(
-                factory = object : androidx.lifecycle.ViewModelProvider.Factory {
+                factory = object : ViewModelProvider.Factory {
                     @Suppress("UNCHECKED_CAST")
                     override fun <T : ViewModel> create(modelClass: Class<T>): T =
                         AiViewModel(repo) as T
@@ -177,7 +190,7 @@ fun AppNav() {
 @Composable
 fun SurveyNavHost(
     vmSurvey: SurveyViewModel,
-    vmAI:     AiViewModel,
+    vmAI: AiViewModel,
     backStack: NavBackStack
 ) {
     Box(Modifier.fillMaxSize().imePadding()) {
