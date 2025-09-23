@@ -5,8 +5,8 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
-import com.negi.surveynav.config.SurveyConfig
 import com.negi.surveynav.config.NodeDTO
+import com.negi.surveynav.config.SurveyConfig
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.serialization.Serializable
-import kotlin.collections.iterator
 
 private const val TAG = "SurveyVM"
 
@@ -69,12 +68,19 @@ class SurveyViewModel(
         nextId = nextId
     )
 
-    private fun nodeOf(id: String): Node = graph.getValue(id)
+    private fun nodeOf(id: String): Node =
+        graph[id] ?: error("Node not found: id=$id (defined nodes=${graph.keys})")
 
     /* ---------- BackStack / current node ---------- */
-    private val nodeStack = ArrayDeque<String>()
+    private val nodeStack = ArrayDeque<String>() // visited path (ids)
     private val _currentNode = MutableStateFlow(Node(id = "Loading", type = NodeType.START))
     val currentNode: StateFlow<Node> = _currentNode.asStateFlow()
+
+    val canGoBack: StateFlow<Boolean> =
+        MutableStateFlow(false).also { out ->
+            // keep a tiny mirror for quick UI checks
+            _currentNode.subscribe { out.value = nodeStack.size > 1 }
+        }
 
     /* ---------- UI events ---------- */
     private val _events = MutableSharedFlow<UiEvent>(extraBufferCapacity = 8)
@@ -83,27 +89,36 @@ class SurveyViewModel(
     /* ---------- Questions / Answers (insertion-ordered) ---------- */
     private val _questions = MutableStateFlow(LinkedHashMap<String, String>() as Map<String, String>)
     val questions: StateFlow<Map<String, String>> = _questions.asStateFlow()
-    fun setQuestion(text: String, key: String) { _questions.update { it.mutableLinked().apply { put(key, text) } } }
+    fun setQuestion(text: String, key: String) {
+        _questions.update { it.mutableLinked().apply { put(key, text) } }
+    }
     fun getQuestion(key: String): String = questions.value[key].orEmpty()
     fun resetQuestions() { _questions.value = LinkedHashMap() }
 
     private val _answers = MutableStateFlow(LinkedHashMap<String, String>() as Map<String, String>)
     val answers: StateFlow<Map<String, String>> = _answers.asStateFlow()
-    fun setAnswer(text: String, key: String) { _answers.update { it.mutableLinked().apply { put(key, text) } } }
+    fun setAnswer(text: String, key: String) {
+        _answers.update { it.mutableLinked().apply { put(key, text) } }
+    }
     fun getAnswer(key: String): String = answers.value[key].orEmpty()
+    fun clearAnswer(key: String) {
+        _answers.update { it.mutableLinked().apply { remove(key) } }
+    }
 
-    /* ---------- Single / Multi ---------- */
+    /* ---------- Single / Multi (ephemeral per node) ---------- */
     private val _single = MutableStateFlow<String?>(null)
     val single: StateFlow<String?> = _single.asStateFlow()
-    fun setSingleChoice(opt: String) { _single.value = opt }
-    fun getSingleChoice(): String? = single.value
+    fun setSingleChoice(opt: String?) { _single.value = opt }
 
     private val _multi = MutableStateFlow<Set<String>>(emptySet())
     val multi: StateFlow<Set<String>> = _multi.asStateFlow()
     fun toggleMultiChoice(opt: String) {
         _multi.update { cur -> cur.toMutableSet().apply { if (!add(opt)) remove(opt) } }
     }
-    fun getMultiChoices(): Set<String> = multi.value
+    fun clearSelections() {
+        _single.value = null
+        _multi.value = emptySet()
+    }
 
     /* ---------- Follow-ups (per node, ordered) ---------- */
     data class FollowupEntry(
@@ -120,7 +135,9 @@ class SurveyViewModel(
         _followups.update { old ->
             val m = old.mutableLinkedLists()
             val list = m.getOrPut(nodeId) { mutableListOf() }
-            if (!(dedupAdjacent && list.lastOrNull()?.question == question)) list.add(FollowupEntry(question))
+            if (!(dedupAdjacent && list.lastOrNull()?.question == question)) {
+                list.add(FollowupEntry(question))
+            }
             m.toImmutableLists()
         }
     }
@@ -129,8 +146,8 @@ class SurveyViewModel(
         _followups.update { old ->
             val m = old.mutableLinkedLists()
             val list = m[nodeId] ?: return@update old
-            val idx = list.indexOfLast { it.answer == null }.takeIf { it >= 0 }
-                ?: list.lastIndex.takeIf { it >= 0 } ?: return@update old
+            val idx = list.indexOfLast { it.answer == null }
+            if (idx < 0) return@update old // 以前は末尾上書きだったが安全側に変更
             list[idx] = list[idx].copy(answer = answer, answeredAt = System.currentTimeMillis())
             m.toImmutableLists()
         }
@@ -146,12 +163,18 @@ class SurveyViewModel(
         }
     }
 
+    fun clearFollowups(nodeId: String) {
+        _followups.update { old ->
+            val m = old.mutableLinkedLists()
+            m.remove(nodeId)
+            m.toImmutableLists()
+        }
+    }
+
     /* ---------- Prompt (from prompts list) ---------- */
     fun getPrompt(nodeId: String, question: String, answer: String): String {
-        // Find template for the given nodeId from config.prompts
         val tpl = config.prompts.firstOrNull { it.nodeId == nodeId }?.prompt
             ?: throw IllegalArgumentException("No prompt defined for nodeId=$nodeId")
-
         return renderTemplate(
             tpl,
             mapOf(
@@ -162,9 +185,7 @@ class SurveyViewModel(
         )
     }
 
-    /**
-     * Simple template renderer replacing placeholders like {{KEY}} (whitespace tolerant).
-     */
+    /** Simple template renderer replacing placeholders like {{KEY}} (whitespace tolerant). */
     private fun renderTemplate(template: String, vars: Map<String, String>): String {
         var out = template
         for ((k, v) in vars) {
@@ -186,6 +207,7 @@ class SurveyViewModel(
         NodeType.DONE -> FlowDone
     }
 
+    @Synchronized
     private fun push(node: Node) {
         _currentNode.value = node
         nodeStack.addLast(node.id)
@@ -193,6 +215,40 @@ class SurveyViewModel(
         Log.d(TAG, "push -> ${node.id}")
     }
 
+    /** 次ノードで質問文が未登録ならプリロードする */
+    private fun ensureQuestion(id: String) {
+        if (getQuestion(id).isEmpty()) {
+            val q = nodeOf(id).question
+            if (q.isNotEmpty()) setQuestion(q, id)
+        }
+    }
+
+    /** 画面遷移時のUI一時状態掃除（必要に応じてUIから呼ぶ） */
+    fun onNodeChangedResetSelections() = clearSelections()
+
+    /** 任意のノードへジャンプ（履歴に積む） */
+    @Synchronized
+    fun goto(nodeId: String) {
+        val node = nodeOf(nodeId)
+        ensureQuestion(node.id)
+        push(node)
+    }
+
+    /** 現在のノードを置き換えてジャンプ（履歴を汚さない） */
+    @Synchronized
+    fun replaceTo(nodeId: String) {
+        val node = nodeOf(nodeId)
+        ensureQuestion(node.id)
+        if (nodeStack.isNotEmpty()) {
+            nodeStack.removeLast()
+            nav.removeLastOrNull()
+        }
+        push(node)
+        Log.d(TAG, "replaceTo -> ${node.id}")
+    }
+
+    /** Startへ完全リセット（NavBackStackも初期化） */
+    @Synchronized
     fun resetToStart() {
         nav.clear()
         nodeStack.clear()
@@ -200,15 +256,17 @@ class SurveyViewModel(
         _currentNode.value = start
         nodeStack.addLast(start.id)
         nav.add(navKeyFor(start))
-        Log.d(TAG, "resetToStart()")
+        Log.d(TAG, "resetToStart() -> ${start.id}")
     }
 
+    /** 1つ戻る。ルートではNo-Op。 */
+    @Synchronized
     fun backToPrevious() {
         if (nodeStack.size <= 1) {
-            nav.removeLastOrNull()
-            Log.d(TAG, "backToPrevious: at root")
+            Log.d(TAG, "backToPrevious: at root (no-op)")
             return
         }
+        // 先にNavを戻し、内部スタックも同期
         nav.removeLastOrNull()
         nodeStack.removeLast()
         val prevId = nodeStack.last()
@@ -216,12 +274,18 @@ class SurveyViewModel(
         Log.d(TAG, "backToPrevious -> $prevId")
     }
 
+    /** 線形next遷移。nextId未設定なら何もしない。 */
+    @Synchronized
     fun advanceToNext() {
         val cur = _currentNode.value
-        val nextId = cur.nextId ?: return
-        if (getQuestion(nextId).isEmpty()) {
-            setQuestion(nodeOf(nextId).question, nextId)
+        val nextId = cur.nextId ?: run {
+            Log.d(TAG, "advanceToNext: no nextId from ${cur.id}")
+            return
         }
+        if (!graph.containsKey(nextId)) {
+            throw IllegalStateException("nextId '$nextId' from node '${cur.id}' does not exist in graph.")
+        }
+        ensureQuestion(nextId)
         push(nodeOf(nextId))
     }
 
@@ -240,15 +304,17 @@ class SurveyViewModel(
     private fun <T> LinkedHashMap<String, MutableList<T>>.toImmutableLists(): Map<String, List<T>> =
         this.mapValues { it.value.toList() }
 
+    // tiny helper to mirror flows without external deps
+    private fun <T> StateFlow<T>.subscribe(onEach: (T) -> Unit) {
+        onEach(value) // initialize once; real collectionは外部(UI層)でやる想定
+    }
+
     init {
-
         graph = config.graph.nodes.associateBy { it.id }.mapValues { (_, dto) -> dto.toNode() }
-
-        _currentNode.value = nodeOf(startId)
-        nodeStack.addLast(startId)
-        nav.add(navKeyFor(_currentNode.value))
+        val start = nodeOf(startId)
+        _currentNode.value = start
+        nodeStack.addLast(start.id)
+        nav.add(navKeyFor(start))
+        Log.d(TAG, "init -> ${start.id}")
     }
 }
-
-
-

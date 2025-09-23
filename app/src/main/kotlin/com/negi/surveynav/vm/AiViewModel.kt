@@ -27,8 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class AiViewModel(
     private val repo: Repository,
-    private val passThreshold: Int = 70,
-    private val DEFAULT_TIMEOUT_MS: Long = 120_000L
+    private val timeout_ms: Long = 120_000L
 ) : ViewModel() {
 
     private val _loading = MutableStateFlow(false)
@@ -49,20 +48,13 @@ class AiViewModel(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
-    /** 評価結果が合格かどうか（nullは不合格扱い） */
-    val passed: StateFlow<Boolean> = MutableStateFlow(false).also { out ->
-        viewModelScope.launch {
-            score.collect { s -> out.value = s?.let { it >= passThreshold } == true }
-        }
-    }
-
     private var evalJob: Job? = null
     private val running = AtomicBoolean(false)
 
     /**
      * サスペンド版：評価完了まで待ち、スコアを返す（失敗時は null）
      */
-    suspend fun evaluate(prompt: String, timeoutMs: Long = DEFAULT_TIMEOUT_MS): Int? {
+    suspend fun evaluate(prompt: String, timeoutMs: Long = timeout_ms): Int? {
 
         if (prompt.isBlank()) {
             resetStates(keepError = false)
@@ -136,7 +128,7 @@ class AiViewModel(
     /**
      * 非同期版：評価を開始して即座に戻す（状態は StateFlow を購読）
      */
-    fun evaluateAsync(prompt: String, timeoutMs: Long = DEFAULT_TIMEOUT_MS): Job =
+    fun evaluateAsync(prompt: String, timeoutMs: Long = timeout_ms): Job =
         viewModelScope.launch {
             evaluate(prompt, timeoutMs)
         }

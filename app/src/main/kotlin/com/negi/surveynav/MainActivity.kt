@@ -5,11 +5,27 @@ package com.negi.surveynav
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -18,19 +34,21 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
-import androidx.navigation3.runtime.*
+import androidx.navigation3.runtime.NavBackStack
+import androidx.navigation3.runtime.entry
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.runtime.rememberSavedStateNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import androidx.navigation3.ui.rememberSceneSetupNavEntryDecorator
 import com.negi.surveynav.config.SurveyConfigLoader
+import com.negi.surveynav.screens.AiScreen
 import com.negi.surveynav.screens.DoneScreen
 import com.negi.surveynav.screens.IntroScreen
-import com.negi.surveynav.screens.MultiChoiceScreen
 import com.negi.surveynav.screens.ReviewScreen
-import com.negi.surveynav.screens.SingleChoiceScreen
 import com.negi.surveynav.slm.InferenceModel
 import com.negi.surveynav.slm.MediaPipeRepository
 import com.negi.surveynav.slm.Repository
-import com.negi.surveynav.screens.AiScreen
 import com.negi.surveynav.vm.AiViewModel
 import com.negi.surveynav.vm.AppViewModel
 import com.negi.surveynav.vm.DlState
@@ -38,9 +56,7 @@ import com.negi.surveynav.vm.DownloadGate
 import com.negi.surveynav.vm.FlowAI
 import com.negi.surveynav.vm.FlowDone
 import com.negi.surveynav.vm.FlowHome
-import com.negi.surveynav.vm.FlowMulti
 import com.negi.surveynav.vm.FlowReview
-import com.negi.surveynav.vm.FlowSingle
 import com.negi.surveynav.vm.FlowText
 import com.negi.surveynav.vm.NodeType
 import com.negi.surveynav.vm.SurveyViewModel
@@ -107,6 +123,7 @@ fun InitGate(
                 }
             }
         }
+
         error != null -> {
             Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -116,6 +133,7 @@ fun InitGate(
                 }
             }
         }
+
         else -> content()
     }
 }
@@ -193,7 +211,9 @@ fun SurveyNavHost(
     vmAI: AiViewModel,
     backStack: NavBackStack
 ) {
-    Box(Modifier.fillMaxSize().imePadding()) {
+    Box(Modifier
+        .fillMaxSize()
+        .imePadding()) {
         NavDisplay(
             backStack = backStack,
             entryDecorators = listOf(
@@ -219,30 +239,6 @@ fun SurveyNavHost(
                         nodeId = node.id,
                         vmSurvey = vmSurvey,
                         vmAI = vmAI,
-                        onNext = { vmSurvey.advanceToNext()  },
-                        onBack = { vmSurvey.backToPrevious() }
-                    )
-                }
-
-                entry<FlowSingle> {
-                    val node by vmSurvey.currentNode.collectAsState()
-                    if (node.type != NodeType.SINGLE_CHOICE) return@entry
-
-                    SingleChoiceScreen(
-                        nodeId = node.id,
-                        vm = vmSurvey,
-                        onNext = { vmSurvey.advanceToNext() },
-                        onBack = { vmSurvey.backToPrevious() }
-                    )
-                }
-
-                entry<FlowMulti> {
-                    val node by vmSurvey.currentNode.collectAsState()
-                    if (node.type != NodeType.MULTI_CHOICE) return@entry
-
-                    MultiChoiceScreen(
-                        nodeId = node.id,
-                        vm = vmSurvey,
                         onNext = { vmSurvey.advanceToNext() },
                         onBack = { vmSurvey.backToPrevious() }
                     )
@@ -266,7 +262,6 @@ fun SurveyNavHost(
                     if (node.type != NodeType.REVIEW) return@entry
 
                     ReviewScreen(
-                        nodeId = node.id,
                         vm = vmSurvey,
                         onNext = { vmSurvey.advanceToNext() },
                         onBack = { vmSurvey.backToPrevious() }
@@ -278,7 +273,6 @@ fun SurveyNavHost(
                     if (node.type != NodeType.DONE) return@entry
 
                     DoneScreen(
-                        nodeId = node.id,
                         vm = vmSurvey,
                         onRestart = {
                             backStack.clear()
@@ -289,5 +283,11 @@ fun SurveyNavHost(
                 }
             }
         )
+
+
+        BackHandler(enabled = true) {
+            vmAI.resetStates()
+            vmSurvey.backToPrevious()
+        }
     }
 }

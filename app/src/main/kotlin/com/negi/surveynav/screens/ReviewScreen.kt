@@ -32,7 +32,6 @@ import com.negi.surveynav.vm.SurveyViewModel
 
 @Composable
 fun ReviewScreen(
-    nodeId: String,
     vm: SurveyViewModel,
     onNext: () -> Unit,
     onBack: () -> Unit
@@ -74,17 +73,17 @@ fun ReviewScreen(
                 // ===== Q&A =====
                 ElevatedCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {
-                        Text("すべてのQ&A", style = titleSmallTight)
+                        Text("All Original Questions and Answers", style = titleSmallTight)
                         Spacer(Modifier.height(6.dp))
-
-                        // デフォルトをより小さめに
                         ProvideTextStyle(bodyTight) {
                             val entries = allAnswers.entries.sortedBy { it.key }
                             if (entries.isEmpty()) {
-                                Text("（まだ回答がありません）")
+                                Text(" There is no records yet.")
                             } else {
                                 entries.forEachIndexed { idx, (key, answer) ->
-                                    if (idx > 0) Divider(Modifier.padding(vertical = 6.dp))
+
+                                    if (idx > 0) HorizontalDivider(Modifier.padding(vertical = 6.dp))
+
                                     Column {
                                         Text(
                                             text = key,
@@ -93,12 +92,11 @@ fun ReviewScreen(
                                         )
                                         Spacer(Modifier.height(2.dp))
                                         Text(
-                                            text = "Q: " + (allQuestions[key].orEmpty()
-                                                .ifBlank { "—（質問なし）" })
+                                            text = "Q: " + (allQuestions[key].orEmpty().ifBlank { "- No Question." })
                                         )
                                         Spacer(Modifier.height(2.dp))
                                         Text(
-                                            text = "A: " + (answer.ifBlank { "—（未回答）" }),
+                                            text = "A: " + (answer.ifBlank { "- No Answer." }),
                                             maxLines = 6,
                                             overflow = TextOverflow.Ellipsis
                                         )
@@ -114,12 +112,12 @@ fun ReviewScreen(
                 // ===== Followups =====
                 ElevatedCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {
-                        Text("フォローアップ履歴（全ノード）", style = titleSmallTight)
+                        Text("Followup History.", style = titleSmallTight)
                         Spacer(Modifier.height(6.dp))
 
                         ProvideTextStyle(bodyTight) {
                             if (allFollowups.isEmpty()) {
-                                Text("（フォローアップはまだありません）")
+                                Text(" No Followup Questions.")
                             } else {
                                 val sortedFollowups = allFollowups.toSortedMap()
                                 sortedFollowups.forEach { (nid, list) ->
@@ -131,12 +129,12 @@ fun ReviewScreen(
                                         color = MaterialTheme.colorScheme.primary
                                     )
                                     if (list.isEmpty()) {
-                                        Text("  （なし）")
+                                        Text("")
                                     } else {
                                         list.forEachIndexed { i, entry ->
                                             Column(Modifier.padding(top = 4.dp)) {
                                                 Text("${i + 1}. Q: ${entry.question}")
-                                                Text("    A: ${entry.answer ?: "—（未回答）"}")
+                                                Text("    A: ${entry.answer ?: "— No Answer."}")
                                             }
                                         }
                                     }

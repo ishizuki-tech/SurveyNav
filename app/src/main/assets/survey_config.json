@@ -10,11 +10,18 @@
     "startId": "Start",
     "nodes": [
       { "id": "Start", "type": "START", "title": "Start", "question": "Start", "nextId": "Q1" },
-      { "id": "Q1", "type": "AI", "title": "Early Maturity (Days)", "question": "What do you consider an early-maturing maize variety? Please answer in days to maturity.", "nextId": "Q2" },
-      { "id": "Q2", "type": "AI", "title": "Current Variety DTM", "question": "In most seasons, how many days does your current maize variety take from planting to harvest?", "nextId": "Q3" },
-      { "id": "Q3", "type": "AI", "title": "Short Rains Deadline", "question": "During the short rains in your area, by which calendar month would you need to harvest to consider it early?", "nextId": "Q4" },
-      { "id": "Q4", "type": "AI", "title": "Yield Trade-off", "question": "What maximum yield loss would you accept to harvest earlier—percentage or bags per acre?", "nextId": "Q5" },
-      { "id": "Q5", "type": "AI", "title": "Top Factors", "question": "When choosing an early-maturing variety, which two factors matter most? (e.g., drought escape, pest escape, double-cropping, market timing)", "nextId": "Review" },
+
+      { "id": "Q1", "type": "AI", "title": "Early Maturity (Days)",
+        "question": "What do you consider an early-maturing maize variety? Please answer in days to maturity.", "nextId": "Q2" },
+      { "id": "Q2", "type": "AI", "title": "Current Variety DTM",
+        "question": "In most seasons, how many days does your current maize variety take from planting to harvest?", "nextId": "Q3" },
+      { "id": "Q3", "type": "AI", "title": "Short Rains Deadline",
+        "question": "During the short rains in your area, by which calendar month would you need to harvest to consider it early?", "nextId": "Q4" },
+      { "id": "Q4", "type": "AI", "title": "Yield Trade-off",
+        "question": "What maximum yield loss would you accept to harvest earlier—percentage or bags per acre?", "nextId": "Q5" },
+      { "id": "Q5", "type": "AI", "title": "Top Factors",
+        "question": "When choosing an early-maturing variety, which two factors matter most? (e.g., drought escape, pest escape, double-cropping, market timing)", "nextId": "Review" },
+
       { "id": "Review", "type": "REVIEW", "title": "Review", "question": "", "nextId": "Done" },
       { "id": "Done", "type": "DONE", "title": "Done", "question": "" }
     ]
