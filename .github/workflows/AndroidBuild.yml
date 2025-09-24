@@ -39,14 +39,6 @@ jobs:
       ORG_GRADLE_PROJECT_releaseKeyAlias: ${{ secrets.ANDROID_KEY_ALIAS }}
       ORG_GRADLE_PROJECT_releaseKeyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
-      # ---- Tokens (your project already reads -PHF_TOKEN / -Pgh.*) ----
-      ORG_GRADLE_PROJECT_HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      ORG_GRADLE_PROJECT_gh.owner: ishizuki-tech
-      ORG_GRADLE_PROJECT_gh.repo: SurveyNav
-      ORG_GRADLE_PROJECT_gh.branch: main
-      ORG_GRADLE_PROJECT_gh.pathPrefix: exports
-      ORG_GRADLE_PROJECT_gh.token: ${{ secrets.GH_TOKEN }}
-
     steps:
       - name: Checkout code (with submodules)
         uses: actions/checkout@v4
@@ -68,8 +60,33 @@ jobs:
         with:
           ndk-version: ${{ inputs.ndk_version }}
 
+      - name: Install Android platforms/build-tools (first-run safety)
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
       - name: Setup Gradle (cache)
         uses: gradle/actions/setup-gradle@v3
+
+      # ====== A. Write gradle.properties (this passes gh.* / HF_TOKEN to Gradle) ======
+      - name: Assert GH_TOKEN is set
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "${{ secrets.GH_TOKEN }}" ] || { echo "::error ::GH_TOKEN is empty"; exit 1; }
+
+      - name: Write CI gradle.properties
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "gh.owner=ishizuki-tech"
+            echo "gh.repo=SurveyNav"
+            echo "gh.branch=main"
+            echo "gh.pathPrefix=exports"
+            echo "gh.token=${{ secrets.GH_TOKEN }}"
+            echo "HF_TOKEN=${{ secrets.HF_TOKEN }}"
+          } >> gradle.properties
+          echo "Wrote gradle.properties:"
+          sed -n '1,200p' gradle.properties | sed 's/gh.token=.*/gh.token=*** masked ***/; s/HF_TOKEN=.*/HF_TOKEN=*** masked ***/'
 
       - name: Debug repo & env (robust)
         shell: bash
@@ -117,7 +134,7 @@ jobs:
         run: ls -lR nativelib/ || true
 
       - name: Decode keystore from secret (optional)
-        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: ${{ env.ANDROID_KEYSTORE_BASELING != '' && env.ANDROID_KEYSTORE_BASE64 != '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -167,7 +184,6 @@ jobs:
           echo "Found AABs:"; printf " - %s\n" "${AABs[@]}" || true
           echo "Found mappings:"; printf " - %s\n" "${MAPs[@]}" || true
 
-      # v4 は改行区切りの path をそのまま受け取れる。ブロックスカラ（|）は不要。
       - name: Upload APKs
         if: ${{ steps.collect.outputs.apk_count != '0' }}
         uses: actions/upload-artifact@v4
@@ -206,7 +222,7 @@ jobs:
                 | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/" | head -n1 || true)
               if [ -n "$CAND" ]; then VERSION="$CAND"; break; fi
             fi
-          done
+          end
           if [ -z "$VERSION" ] && [ -f "${MODULE_PATH}/src/main/AndroidManifest.xml" ]; then
             VERSION=$(grep -oP 'versionName="([^"]+)"' "${MODULE_PATH}/src/main/AndroidManifest.xml" \
               | sed -E 's/versionName="([^"]+)"/\1/' | head -n1 || true)
@@ -224,7 +240,6 @@ jobs:
           echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
           echo "Tag: $TAG"
 
-      # ======== Compose Release body (NO heredoc; printf-based) ========
       - name: Compose release body (notes + install guide)
         id: release_body
         shell: bash
