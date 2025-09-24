@@ -1,36 +1,31 @@
-name: Android CI & Dynamic Release
+name: Android CI & Release
 
 on:
   workflow_dispatch:
     inputs:
       module:
-        description: "Android module path (e.g. app)"
-        required: false
+        description: "Android module (e.g. app)"
         default: "app"
       create_release:
-        description: "Create GitHub Release and upload artifacts?"
-        required: false
+        description: "Publish GitHub Release with artifacts"
         type: boolean
         default: true
       ndk_version:
         description: "Android NDK version"
-        required: false
         default: "25.2.9519653"
 
 permissions:
   contents: write
-  packages: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  build-and-release:
+  build:
     runs-on: ubuntu-latest
     env:
       MODULE_PATH: ${{ inputs.module || 'app' }}
-      # ---- Android signing (optional) ----
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -40,329 +35,173 @@ jobs:
       ORG_GRADLE_PROJECT_releaseKeyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
     steps:
-      - name: Checkout code (with submodules)
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 0
+          submodules: recursive
 
-      - name: Validate Gradle Wrapper (security)
+      - name: Validate Gradle wrapper
         uses: gradle/wrapper-validation-action@v2
 
-      - name: Set up JDK 17
+      - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      - name: Set up Android SDK & NDK
+      - name: Install Android SDK & NDK
         uses: android-actions/setup-android@v3
         with:
           ndk-version: ${{ inputs.ndk_version }}
 
-      - name: Install Android platforms/build-tools (first-run safety)
-        shell: bash
-        run: |
-          set -euo pipefail
-          yes | sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "platform-tools" || true
+      - name: Install required SDK components
+        run: |-
+          yes | sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "platform-tools" || true
 
-      - name: Setup Gradle (cache)
+      - name: Configure Gradle cache
         uses: gradle/actions/setup-gradle@v3
 
-      # ====== Write gradle.properties in user home (gh.* / HF_TOKEN を渡す) ======
-      - name: Assert GH_TOKEN is set
+      - name: Configure gradle.properties
         shell: bash
-        run: |
-          set -euo pipefail
-          [ -n "${{ secrets.GH_TOKEN }}" ] || { echo "::error ::GH_TOKEN is empty"; exit 1; }
+        run: |-
+          [[ -n "${{ secrets.GH_TOKEN }}" ]] || { echo "::error ::GH_TOKEN is not configured"; exit 1; }
+          mkdir -p "$HOME/.gradle"
+          cat <<'PROPS' > "$HOME/.gradle/gradle.properties"
+          gh.owner=ishizuki-tech
+          gh.repo=SurveyNav
+          gh.branch=main
+          gh.pathPrefix=exports
+          gh.token=${{ secrets.GH_TOKEN }}
+          HF_TOKEN=${{ secrets.HF_TOKEN }}
+          PROPS
 
-      - name: Write CI gradle.properties (user home; safe)
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.gradle
-          FILE="$HOME/.gradle/gradle.properties"
-          # 既存末尾が改行で終わってなければ改行を挿入
-          if [ -f "$FILE" ] && [ -n "$(tail -c1 "$FILE" 2>/dev/null || true)" ]; then
-            echo >> "$FILE"
-          fi
-          {
-            echo "gh.owner=ishizuki-tech"
-            echo "gh.repo=SurveyNav"
-            echo "gh.branch=main"
-            echo "gh.pathPrefix=exports"
-            echo "gh.token=${{ secrets.GH_TOKEN }}"
-            echo "HF_TOKEN=${{ secrets.HF_TOKEN }}"
-          } >> "$FILE"
-          echo "=== ~/.gradle/gradle.properties (masked) ==="
-          sed -n '1,200p' "$FILE" \
-            | sed -E 's/(gh\.token=).*/\1*** masked ***/; s/(HF_TOKEN=).*/\1*** masked ***/'
-
-      - name: Debug repo & env (robust)
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "=== PWD ==="; pwd || true
-          echo "=== Runner ==="; whoami || true; uname -a || true
-          echo "=== Git ==="; git --version || true
-          git rev-parse --show-toplevel 2>/dev/null || true
-          git status --porcelain --branch || true
-          git log -5 --pretty=format:'%h %s (%an)' || true
-          ls -la || true
-          sed -n '1,20p' ./gradlew || true
-          echo "JAVA_HOME=${JAVA_HOME:-<unset>}"
-          echo "ANDROID_HOME=${ANDROID_HOME:-<unset>}"
-          java -version || true
-
-      - name: Ensure gradle wrapper present (fallback if missing)
-        if: ${{ hashFiles('gradle/wrapper/gradle-wrapper.jar') == '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "gradle-wrapper.jar missing — generating temporary wrapper."
-          sudo apt-get update -y
-          sudo apt-get install -y gradle
-          gradle wrapper --gradle-version 8.11.1
-          chmod +x ./gradlew
-
-      - name: Check gradle wrapper presence
-        shell: bash
-        run: |
-          set -euo pipefail
-          [ -f "./gradlew" ] || { echo "::error ::gradlew missing"; exit 1; }
-          [ -f "gradle/wrapper/gradle-wrapper.jar" ] || { echo "::error ::gradle-wrapper.jar missing"; exit 1; }
-          echo "Gradle wrapper OK."
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x ./gradlew
-
-      - name: Verify Gradle Wrapper
-        run: ./gradlew --version
-
-      - name: Verify Gradle sees props (masked)
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./gradlew -q :${MODULE_PATH}:properties \
-            | sed -n '1,200p' \
-            | sed -E 's/(gh\.token=).*/\1*** masked ***/; s/(HF_TOKEN=).*/\1*** masked ***/' \
-            | grep -E 'gh\.owner|gh\.repo|gh\.branch|gh\.pathPrefix|gh\.token|HF_TOKEN' || true
-
-      - name: List JNI sources (debug)
-        run: ls -lR nativelib/ || true
-
-      - name: Decode keystore from secret (optional)
+      - name: Decode signing keystore
         if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
+        run: |-
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > keystore.jks
           echo "ANDROID_KEYSTORE_FILE=$PWD/keystore.jks" >> $GITHUB_ENV
 
-      - name: Build with Gradle (Release)
-        id: gradle_build
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./gradlew :${MODULE_PATH}:clean :${MODULE_PATH}:assembleRelease :${MODULE_PATH}:bundleRelease --no-daemon --stacktrace
+      - name: Build release artifacts
+        run: |-
+          ./gradlew \
+            :${{ env.MODULE_PATH }}:clean \
+            :${{ env.MODULE_PATH }}:assembleRelease \
+            :${{ env.MODULE_PATH }}:bundleRelease \
+            --no-daemon --stacktrace
 
-      - name: Collect artifacts
+      - name: Collect outputs
         id: collect
         shell: bash
-        run: |
-          set -euo pipefail
+        run: |-
           ROOT="${MODULE_PATH}/build/outputs"
-          mapfile -t APKs < <(find "$ROOT" -type f -name "*.apk" | sort)
-          mapfile -t AABs < <(find "$ROOT" -type f -name "*.aab" | sort)
-          mapfile -t MAPs < <(find "${MODULE_PATH}/build/outputs" -type f -name "mapping.txt" | sort || true)
-
-          echo "apk_count=${#APKs[@]}" >> "$GITHUB_OUTPUT"
-          echo "aab_count=${#AABs[@]}" >> "$GITHUB_OUTPUT"
-          echo "map_count=${#MAPs[@]}" >> "$GITHUB_OUTPUT"
-
+          mapfile -t APKs < <(find "$ROOT" -type f -name '*.apk' -print | sort)
+          mapfile -t AABs < <(find "$ROOT" -type f -name '*.aab' -print | sort)
+          mapfile -t MAPs < <(find "$ROOT" -type f -name 'mapping.txt' -print | sort)
+          printf '%s\n' "apk_count=${#APKs[@]}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "aab_count=${#AABs[@]}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "map_count=${#MAPs[@]}" >> "$GITHUB_OUTPUT"
           {
             echo "apk_list<<EOF"
-            printf "%s\n" "${APKs[@]}"
+            printf '%s\n' "${APKs[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-
           {
             echo "aab_list<<EOF"
-            printf "%s\n" "${AABs[@]}"
+            printf '%s\n' "${AABs[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-
           {
             echo "map_list<<EOF"
-            printf "%s\n" "${MAPs[@]}"
+            printf '%s\n' "${MAPs[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-          echo "Found APKs:"; printf " - %s\n" "${APKs[@]}" || true
-          echo "Found AABs:"; printf " - %s\n" "${AABs[@]}" || true
-          echo "Found mappings:"; printf " - %s\n" "${MAPs[@]}" || true
-
-      - name: Upload APKs
+      - name: Upload APK artifacts
         if: ${{ steps.collect.outputs.apk_count != '0' }}
         uses: actions/upload-artifact@v4
         with:
-          name: release-apks
+          name: release-apk
           path: ${{ steps.collect.outputs.apk_list }}
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload AABs
+      - name: Upload AAB artifacts
         if: ${{ steps.collect.outputs.aab_count != '0' }}
         uses: actions/upload-artifact@v4
         with:
-          name: release-aabs
+          name: release-aab
           path: ${{ steps.collect.outputs.aab_list }}
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload ProGuard/R8 mappings
+      - name: Upload mapping files
         if: ${{ steps.collect.outputs.map_count != '0' }}
         uses: actions/upload-artifact@v4
         with:
-          name: proguard-mappings
+          name: proguard-mapping
           path: ${{ steps.collect.outputs.map_list }}
           retention-days: 14
 
-      - name: Extract versionName
+      - name: Derive version name
         id: version
         shell: bash
-        run: |
-          set -euo pipefail
-          VERSION=""
-          for FILE in "${MODULE_PATH}/build.gradle.kts" "${MODULE_PATH}/build.gradle"; do
-            if [ -f "$FILE" ]; then
-              CAND=$(grep -Eo 'versionName[[:space:]]*[:=]?[[:space:]]*["'"'"'][^"'"'"']+["'"'"']' "$FILE" \
-                | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/" | head -n1 || true)
-              if [ -n "$CAND" ]; then VERSION="$CAND"; break; fi
-            fi
-          done
-          if [ -z "$VERSION" ] && [ -f "${MODULE_PATH}/src/main/AndroidManifest.xml" ]; then
-            VERSION=$(grep -oP 'versionName="([^"]+)"' "${MODULE_PATH}/src/main/AndroidManifest.xml" \
-              | sed -E 's/versionName="([^"]+)"/\1/' | head -n1 || true)
+        run: |-
+          VERSION=$(grep -Eo 'versionName\s*=?\s*["\']([^"\']+)' "${MODULE_PATH}/build.gradle.kts" | head -n1 | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/")
+          if [[ -z "$VERSION" && -f "${MODULE_PATH}/src/main/AndroidManifest.xml" ]]; then
+            VERSION=$(grep -oP 'versionName="([^"]+)' "${MODULE_PATH}/src/main/AndroidManifest.xml" | sed -E 's/versionName="([^"]+)/\1/' | head -n1)
           fi
-          [ -n "$VERSION" ] || VERSION="0.0.0"
+          [[ -n "$VERSION" ]] || VERSION="0.0.0"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Detected versionName: $VERSION"
 
-      - name: Set tag name (version + datetime)
+      - name: Prepare release body
+        id: notes
+        shell: bash
+        run: |-
+          mapfile -t APKs < <(printf '%s\n' "${{ steps.collect.outputs.apk_list }}" | sed '/^$/d')
+          mapfile -t AABs < <(printf '%s\n' "${{ steps.collect.outputs.aab_list }}" | sed '/^$/d')
+          NOTES=$(git log -10 --pretty='* %s (%an)')
+          APK_SAMPLE=${APKs[0]:-your-release.apk}
+          AAB_SAMPLE=${AABs[0]:-your-release.aab}
+          DELIM="BODY_$(date +%s)"
+          {
+            echo "body<<$DELIM"
+            echo "## What's Changed"
+            echo "$NOTES"
+            echo
+            echo "## Install Guide"
+            echo "1. adb install -r -g $APK_SAMPLE"
+            echo "2. bundletool build-apks --bundle $AAB_SAMPLE --output app.apks --mode=universal"
+            echo "3. bundletool install-apks --apks app.apks"
+            echo
+            echo "## Assets"
+            for f in "${APKs[@]}"; do [[ -n "$f" ]] && echo "- $(basename "$f")"; done
+            for f in "${AABs[@]}"; do [[ -n "$f" ]] && echo "- $(basename "$f")"; done
+            echo "$DELIM"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compute release tag
         id: tag
         shell: bash
-        run: |
-          set -euo pipefail
+        run: |-
           TAG="v${{ steps.version.outputs.version }}-$(date '+%Y%m%d-%H%M')"
-          echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Tag: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Compose release body (notes + install guide)
-        id: release_body
-        shell: bash
-        run: |
-          set -euo pipefail
-          ROOT="${MODULE_PATH}/build/outputs"
-          mapfile -t APKs < <(find "$ROOT" -type f -name "*.apk" | sort)
-          mapfile -t AABs < <(find "$ROOT" -type f -name "*.aab" | sort)
-          NOTES=$(git log -10 --pretty="* %s (%an)")
-          APK_EXAMPLE="your-release.apk"
-          AAB_EXAMPLE="your-release.aab"
-          if (( ${#APKs[@]} > 0 )); then APK_EXAMPLE="$(basename "${APKs[0]}")"; fi
-          if (( ${#AABs[@]} > 0 )); then AAB_EXAMPLE="$(basename "${AABs[0]}")"; fi
-
-          DELIM="EOF_$(date +%s)_$RANDOM"
-          OUT="$GITHUB_OUTPUT"
-          echo "body<<$DELIM" >> "$OUT"
-          wl(){ printf '%s\n' "$1" >> "$OUT"; }
-
-          wl "## What's Changed"
-          wl "$NOTES"
-          wl ""
-          wl "## Install Guide"
-          wl ""
-          wl "### 1) Install an APK via ADB"
-          wl "1. Enable *Developer options* and *USB debugging* on your device."
-          wl "2. Make sure the device is detected:"
-          wl '```bash'
-          wl 'adb devices -l'
-          wl '```'
-          wl "3. Install a single APK (universal or ABI-specific):"
-          wl '```bash'
-          wl "adb install -r -g ${APK_EXAMPLE}"
-          wl '```'
-          wl "- Check device ABI with: \`adb shell getprop ro.product.cpu.abi\`"
-          wl ""
-          wl "### 2) Install from an AAB using bundletool"
-          wl '```bash'
-          wl "java -jar bundletool-all.jar build-apks --bundle ${AAB_EXAMPLE} --output app.apks --mode=universal"
-          wl "java -jar bundletool-all.jar install-apks --apks app.apks"
-          wl '```'
-          wl ""
-          wl "## Assets"
-          for f in "${APKs[@]}"; do wl "- $(basename "$f")"; done
-          for f in "${AABs[@]}"; do wl "- $(basename "$f")"; done
-          echo "$DELIM" >> "$OUT"
-
-      - name: Create or update Release and upload assets
+      - name: Publish GitHub Release
         if: ${{ inputs.create_release && (steps.collect.outputs.apk_count != '0' || steps.collect.outputs.aab_count != '0') }}
-        uses: actions/github-script@v7
+        uses: softprops/action-gh-release@v2
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            const tag = '${{ steps.tag.outputs.tag_name }}';
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
+          tag_name: ${{ steps.tag.outputs.tag }}
+          body: ${{ steps.notes.outputs.body }}
+          files: |
+            ${{ steps.collect.outputs.apk_list }}
+            ${{ steps.collect.outputs.aab_list }}
+          draft: false
+          prerelease: false
 
-            function toList(multiline) {
-              return (multiline || '').split('\n').map(s => s.trim()).filter(Boolean);
-            }
-            const apks = toList(${{ toJSON(steps.collect.outputs.apk_list) }});
-            const aabs = toList(${{ toJSON(steps.collect.outputs.aab_list) }});
-            const body = ${{ toJSON(steps.release_body.outputs.body) }};
-
-            core.info(`Target tag: ${tag}`);
-            core.info(`APKs: ${apks.length}, AABs: ${aabs.length}`);
-
-            let release;
-            try {
-              const getRes = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
-              release = getRes.data;
-              await github.rest.repos.updateRelease({
-                owner, repo, release_id: release.id, body, name: `Release ${tag}`, draft: false, prerelease: false
-              });
-            } catch (e) {
-              if (e.status === 404) {
-                const createRes = await github.rest.repos.createRelease({
-                  owner, repo, tag_name: tag, name: `Release ${tag}`, body, draft: false, prerelease: false
-                });
-                release = createRes.data;
-              } else {
-                core.setFailed(`Release API error: ${e.message}`);
-                return;
-              }
-            }
-
-            const assetsRes = await github.rest.repos.listReleaseAssets({ owner, repo, release_id: release.id });
-            const existing = new Map(assetsRes.data.map(a => [a.name, a.id]));
-
-            async function upload(file) {
-              const name = path.basename(file);
-              if (existing.has(name)) {
-                await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: existing.get(name) });
-              }
-              const data = fs.readFileSync(file);
-              await github.rest.repos.uploadReleaseAsset({
-                owner, repo, release_id: release.id, name, data,
-                headers: { 'content-type': 'application/octet-stream', 'content-length': data.length }
-              });
-              core.info(`Uploaded ${name}`);
-            }
-            for (const f of [...apks, ...aabs]) { await upload(f); }
-
-      - name: Skip release (no artifacts or disabled)
+      - name: Skip release
         if: ${{ !inputs.create_release || (steps.collect.outputs.apk_count == '0' && steps.collect.outputs.aab_count == '0') }}
-        run: echo "Release step skipped."
+        run: echo "Release publishing skipped."
