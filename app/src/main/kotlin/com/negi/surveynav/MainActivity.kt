@@ -42,6 +42,7 @@ import androidx.navigation3.runtime.rememberSavedStateNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import androidx.navigation3.ui.rememberSceneSetupNavEntryDecorator
 import com.negi.surveynav.config.SurveyConfigLoader
+import com.negi.surveynav.net.GitHubConfig
 import com.negi.surveynav.screens.AiScreen
 import com.negi.surveynav.screens.DoneScreen
 import com.negi.surveynav.screens.IntroScreen
@@ -271,14 +272,20 @@ fun SurveyNavHost(
                 entry<FlowDone> {
                     val node by vmSurvey.currentNode.collectAsState()
                     if (node.type != NodeType.DONE) return@entry
+                    val gh = if (BuildConfig.GH_TOKEN.isNotEmpty()) {
+                        GitHubConfig(
+                            owner = BuildConfig.GH_OWNER,        // "ishizuki-tech"
+                            repo = BuildConfig.GH_REPO,          // "SurveyNav"
+                            branch = BuildConfig.GH_BRANCH,      // "main"
+                            pathPrefix = BuildConfig.GH_PATH_PREFIX, // "exports"
+                            token = BuildConfig.GH_TOKEN         // PAT
+                        )
+                    } else null
 
                     DoneScreen(
                         vm = vmSurvey,
-                        onRestart = {
-                            backStack.clear()
-                            vmSurvey.resetToStart()
-                            vmSurvey.resetQuestions()
-                        }
+                        onRestart = { vmSurvey.resetToStart() },
+                        gitHubConfig = gh
                     )
                 }
             }

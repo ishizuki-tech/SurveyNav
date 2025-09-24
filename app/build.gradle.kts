@@ -1,3 +1,5 @@
+import java.util.Properties
+
 // file: app/build.gradle.kts
 plugins {
     alias(libs.plugins.android.application)
@@ -10,6 +12,19 @@ android {
     namespace = "com.negi.surveynav"
     compileSdk = 36
 
+    // ---- load props once & helpers (usable in defaultConfig/buildTypes) ----
+    val localProps = Properties().apply {
+        val f = rootProject.file("local.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    fun prop(name: String, default: String = ""): String =
+        (project.findProperty(name) as String?)
+            ?.takeIf { it.isNotBlank() }
+            ?: localProps.getProperty(name)
+                ?.takeIf { it.isNotBlank() }
+            ?: default
+    fun quote(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
     defaultConfig {
         applicationId = "com.negi.surveynav"
         minSdk = 24
@@ -19,21 +34,25 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // デフォルトは空（安全側）
-        buildConfigField("String", "HF_TOKEN", "\"\"")
+        // ---- GitHub BuildConfig (available in all buildTypes) ----
+        buildConfigField("String", "GH_OWNER",       quote(prop("gh.owner")))
+        buildConfigField("String", "GH_REPO",        quote(prop("gh.repo")))
+        buildConfigField("String", "GH_BRANCH",      quote(prop("gh.branch", "main")))
+        buildConfigField("String", "GH_PATH_PREFIX", quote(prop("gh.pathPrefix", "exports")))
+        buildConfigField("String", "GH_TOKEN",       quote(prop("gh.token")))
     }
+
     buildFeatures {
-        buildConfig = true     // ← enable BuildConfig generation
+        buildConfig = true     // enable BuildConfig generation
         compose = true
     }
+
     buildTypes {
-
         debug {
-            val raw = (project.findProperty("HF_TOKEN") as String?) ?: ""
-            val esc = raw.replace("\\", "\\\\").replace("\"", "\\\"")
-            buildConfigField("String", "HF_TOKEN", "\"$esc\"")
+            // HF_TOKEN from -PHF_TOKEN or local.properties HF_TOKEN
+            val hf = prop("HF_TOKEN")
+            buildConfigField("String", "HF_TOKEN", quote(hf))
         }
-
         release {
             isMinifyEnabled = false
             proguardFiles(
@@ -41,11 +60,10 @@ android {
                 "proguard-rules.pro"
             )
 
-            val raw = (project.findProperty("HF_TOKEN") as String?) ?: ""
-            val esc = raw.replace("\\", "\\\\").replace("\"", "\\\"")
-            buildConfigField("String", "HF_TOKEN", "\"$esc\"")
+            val hf = prop("HF_TOKEN")
+            buildConfigField("String", "HF_TOKEN", quote(hf))
 
-            // デモ用：debug 証明書で署名（必要なら差し替え）
+            // demo: sign with debug keystore (replace as needed)
             signingConfig = signingConfigs.getByName("debug")
         }
     }
@@ -55,8 +73,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
     kotlinOptions { jvmTarget = "11" }
-
-    buildFeatures { compose = true }
 }
 
 dependencies {
@@ -101,6 +117,7 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
 
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.androidx.work.runtime.ktx)
 
     // AppCompat 系（これが無いと AppCompatActivity / AppCompatDelegate が解決しない）
     implementation(libs.androidx.appcompat)

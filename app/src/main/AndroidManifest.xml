@@ -2,10 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- ネット通信に必須 -->
+    <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- オフライン検知やUI制御に使うなら（任意） -->
+    <!-- Optional: if you check connectivity for UI, etc. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- To receive BOOT_COMPLETED after device restart -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:allowBackup="true"
@@ -17,17 +20,27 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.SurveyNav"
         tools:targetApi="31">
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
             android:theme="@style/Theme.SurveyNav">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-    </application>
 
+        <!-- AndroidManifest.xml -->
+        <receiver
+            android:name="com.negi.surveynav.net.UploadRescheduleReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
 </manifest>
