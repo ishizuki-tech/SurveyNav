@@ -61,22 +61,31 @@ jobs:
           ndk-version: ${{ inputs.ndk_version }}
 
       - name: Install Android platforms/build-tools (first-run safety)
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "platform-tools" || true
 
       - name: Setup Gradle (cache)
         uses: gradle/actions/setup-gradle@v3
 
-      # ====== A. Write gradle.properties (this passes gh.* / HF_TOKEN to Gradle) ======
+      # ====== Write gradle.properties in user home (gh.* / HF_TOKEN を渡す) ======
       - name: Assert GH_TOKEN is set
         shell: bash
         run: |
           set -euo pipefail
           [ -n "${{ secrets.GH_TOKEN }}" ] || { echo "::error ::GH_TOKEN is empty"; exit 1; }
 
-      - name: Write CI gradle.properties
+      - name: Write CI gradle.properties (user home; safe)
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p ~/.gradle
+          FILE="$HOME/.gradle/gradle.properties"
+          # 既存末尾が改行で終わってなければ改行を挿入
+          if [ -f "$FILE" ] && [ -n "$(tail -c1 "$FILE" 2>/dev/null || true)" ]; then
+            echo >> "$FILE"
+          fi
           {
             echo "gh.owner=ishizuki-tech"
             echo "gh.repo=SurveyNav"
@@ -84,9 +93,10 @@ jobs:
             echo "gh.pathPrefix=exports"
             echo "gh.token=${{ secrets.GH_TOKEN }}"
             echo "HF_TOKEN=${{ secrets.HF_TOKEN }}"
-          } >> gradle.properties
-          echo "Wrote gradle.properties:"
-          sed -n '1,200p' gradle.properties | sed 's/gh.token=.*/gh.token=*** masked ***/; s/HF_TOKEN=.*/HF_TOKEN=*** masked ***/'
+          } >> "$FILE"
+          echo "=== ~/.gradle/gradle.properties (masked) ==="
+          sed -n '1,200p' "$FILE" \
+            | sed -E 's/(gh\.token=).*/\1*** masked ***/; s/(HF_TOKEN=).*/\1*** masked ***/'
 
       - name: Debug repo & env (robust)
         shell: bash
@@ -104,7 +114,6 @@ jobs:
           echo "ANDROID_HOME=${ANDROID_HOME:-<unset>}"
           java -version || true
 
-      # hashFiles() は存在しないと '' を返すので、その判定に変更
       - name: Ensure gradle wrapper present (fallback if missing)
         if: ${{ hashFiles('gradle/wrapper/gradle-wrapper.jar') == '' }}
         shell: bash
@@ -130,11 +139,20 @@ jobs:
       - name: Verify Gradle Wrapper
         run: ./gradlew --version
 
+      - name: Verify Gradle sees props (masked)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew -q :${MODULE_PATH}:properties \
+            | sed -n '1,200p' \
+            | sed -E 's/(gh\.token=).*/\1*** masked ***/; s/(HF_TOKEN=).*/\1*** masked ***/' \
+            | grep -E 'gh\.owner|gh\.repo|gh\.branch|gh\.pathPrefix|gh\.token|HF_TOKEN' || true
+
       - name: List JNI sources (debug)
         run: ls -lR nativelib/ || true
 
       - name: Decode keystore from secret (optional)
-        if: ${{ env.ANDROID_KEYSTORE_BASELING != '' && env.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -222,7 +240,7 @@ jobs:
                 | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/" | head -n1 || true)
               if [ -n "$CAND" ]; then VERSION="$CAND"; break; fi
             fi
-          end
+          done
           if [ -z "$VERSION" ] && [ -f "${MODULE_PATH}/src/main/AndroidManifest.xml" ]; then
             VERSION=$(grep -oP 'versionName="([^"]+)"' "${MODULE_PATH}/src/main/AndroidManifest.xml" \
               | sed -E 's/versionName="([^"]+)"/\1/' | head -n1 || true)
