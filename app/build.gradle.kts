@@ -39,7 +39,6 @@ android {
         buildConfigField("String", "GH_REPO",        quote(prop("gh.repo")))
         buildConfigField("String", "GH_BRANCH",      quote(prop("gh.branch", "main")))
         buildConfigField("String", "GH_PATH_PREFIX", quote(prop("gh.pathPrefix", "exports")))
-        buildConfigField("String", "GH_TOKEN",       quote(prop("gh.token")))
     }
 
     buildFeatures {
@@ -49,9 +48,8 @@ android {
 
     buildTypes {
         debug {
-            // HF_TOKEN from -PHF_TOKEN or local.properties HF_TOKEN
-            val hf = prop("HF_TOKEN")
-            buildConfigField("String", "HF_TOKEN", quote(hf))
+            buildConfigField("String", "GH_TOKEN", quote(prop("gh.token")))
+            buildConfigField("String", "HF_TOKEN", quote(prop("HF_TOKEN")))
         }
         release {
             isMinifyEnabled = false
@@ -60,8 +58,8 @@ android {
                 "proguard-rules.pro"
             )
 
-            val hf = prop("HF_TOKEN")
-            buildConfigField("String", "HF_TOKEN", quote(hf))
+            buildConfigField("String", "GH_TOKEN", quote(prop("gh.token")))
+            buildConfigField("String", "HF_TOKEN", quote(prop("HF_TOKEN")))
 
             // demo: sign with debug keystore (replace as needed)
             signingConfig = signingConfigs.getByName("debug")
