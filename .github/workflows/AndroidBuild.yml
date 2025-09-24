@@ -102,25 +102,28 @@ jobs:
         shell: bash
         run: |-
           ROOT="${MODULE_PATH}/build/outputs"
-          mapfile -t APKs < <(find "$ROOT" -type f -name '*.apk' -print | sort)
-          mapfile -t AABs < <(find "$ROOT" -type f -name '*.aab' -print | sort)
-          mapfile -t MAPs < <(find "$ROOT" -type f -name 'mapping.txt' -print | sort)
-          printf '%s\n' "apk_count=${#APKs[@]}" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "aab_count=${#AABs[@]}" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "map_count=${#MAPs[@]}" >> "$GITHUB_OUTPUT"
+          APKs=$(find "$ROOT" -type f -name '*.apk' -print | sort || true)
+          AABs=$(find "$ROOT" -type f -name '*.aab' -print | sort || true)
+          MAPs=$(find "$ROOT" -type f -name 'mapping.txt' -print | sort || true)
+          APK_COUNT=$(printf '%s\n' "$APKs" | sed '/^$/d' | wc -l | tr -d ' ')
+          AAB_COUNT=$(printf '%s\n' "$AABs" | sed '/^$/d' | wc -l | tr -d ' ')
+          MAP_COUNT=$(printf '%s\n' "$MAPs" | sed '/^$/d' | wc -l | tr -d ' ')
+          printf '%s\n' "apk_count=$APK_COUNT" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "aab_count=$AAB_COUNT" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "map_count=$MAP_COUNT" >> "$GITHUB_OUTPUT"
           {
             echo "apk_list<<EOF"
-            printf '%s\n' "${APKs[@]}"
+            printf '%s\n' "$APKs"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           {
             echo "aab_list<<EOF"
-            printf '%s\n' "${AABs[@]}"
+            printf '%s\n' "$AABs"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           {
             echo "map_list<<EOF"
-            printf '%s\n' "${MAPs[@]}"
+            printf '%s\n' "$MAPs"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -165,11 +168,13 @@ jobs:
         id: notes
         shell: bash
         run: |-
-          mapfile -t APKs < <(printf '%s\n' "${{ steps.collect.outputs.apk_list }}" | sed '/^$/d')
-          mapfile -t AABs < <(printf '%s\n' "${{ steps.collect.outputs.aab_list }}" | sed '/^$/d')
+          APKs=$(printf '%s\n' "${{ steps.collect.outputs.apk_list }}" | sed '/^$/d')
+          AABs=$(printf '%s\n' "${{ steps.collect.outputs.aab_list }}" | sed '/^$/d')
           NOTES=$(git log -10 --pretty='* %s (%an)')
-          APK_SAMPLE=${APKs[0]:-your-release.apk}
-          AAB_SAMPLE=${AABs[0]:-your-release.aab}
+          APK_SAMPLE=$(printf '%s\n' "$APKs" | head -n1)
+          AAB_SAMPLE=$(printf '%s\n' "$AABs" | head -n1)
+          [[ -n "$APK_SAMPLE" ]] || APK_SAMPLE="your-release.apk"
+          [[ -n "$AAB_SAMPLE" ]] || AAB_SAMPLE="your-release.aab"
           DELIM="BODY_$(date +%s)"
           {
             echo "body<<$DELIM"
@@ -182,8 +187,12 @@ jobs:
             echo "3. bundletool install-apks --apks app.apks"
             echo
             echo "## Assets"
-            for f in "${APKs[@]}"; do [[ -n "$f" ]] && echo "- $(basename "$f")"; done
-            for f in "${AABs[@]}"; do [[ -n "$f" ]] && echo "- $(basename "$f")"; done
+            printf '%s\n' "$APKs" | sed '/^$/d' | while IFS= read -r f; do
+              echo "- $(basename "$f")"
+            done
+            printf '%s\n' "$AABs" | sed '/^$/d' | while IFS= read -r f; do
+              echo "- $(basename "$f")"
+            done
             echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
 
