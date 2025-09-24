@@ -157,19 +157,23 @@ jobs:
         id: version
         shell: bash
         run: |-
-          VERSION_LINE=$(grep -Eo 'versionName\s*[:=]\s*"[^"]+"' "${MODULE_PATH}/build.gradle.kts" | head -n1)
-          if [ -n "$VERSION_LINE" ]; then
-            VERSION=${VERSION_LINE##*"}
-            VERSION=${VERSION%%"*}
+          set -Eeuo pipefail
+          FILE_GRADLE="${MODULE_PATH}/build.gradle.kts"
+          FILE_MANIFEST="${MODULE_PATH}/src/main/AndroidManifest.xml"
+          VERSION=""
+
+          if [[ -f "$FILE_GRADLE" ]]; then
+            VERSION=$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*[:=][[:space:]]*"([^"]+)".*/\1/p' "$FILE_GRADLE" | head -n1 || true)
           fi
-          if [ -z "$VERSION" ] && [ -f "${MODULE_PATH}/src/main/AndroidManifest.xml" ]; then
-            VERSION_LINE=$(grep -Eo 'versionName="[^"]+"' "${MODULE_PATH}/src/main/AndroidManifest.xml" | head -n1)
-            VERSION=${VERSION_LINE##*"}
-            VERSION=${VERSION%%"*}
+
+          if [[ -z "${VERSION:-}" && -f "$FILE_MANIFEST" ]]; then
+            VERSION=$(sed -nE 's/.*versionName="([^"]+)".*/\1/p' "$FILE_MANIFEST" | head -n1 || true)
           fi
-          if [ -z "$VERSION" ]; then
+
+          if [[ -z "${VERSION:-}" ]]; then
             VERSION="0.0.0"
           fi
+
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Prepare release body
