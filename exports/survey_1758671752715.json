@@ -1,0 +1,41 @@
+{
+  "answers": {
+    "Q1": {
+      "question": "What is the typical maturity range for maize varieties you are familiar with?",
+      "answer": "seen she's"
+    },
+    "Q2": {
+      "question": "How are 'days' measured (from planting emergence?)",
+      "answer": "sand hand the back"
+    },
+    "Q3": {
+      "question": "Which calendar system do you use (Gregorian, Julian)?",
+      "answer": "Ava feedback"
+    },
+    "Q4": {
+      "question": "What crop are we discussing?",
+      "answer": "ABC grhhff what thanks h yeah"
+    },
+    "Q5": {
+      "question": "How does yield compare to drought tolerance when both are limited?",
+      "answer": "av next he e the my"
+    }
+  },
+  "followups": {
+    "Q1": [
+      { "question": "What is the typical maturity range for maize varieties you are familiar with?", "answer": "" }
+    ],
+    "Q2": [
+      { "question": "How are 'days' measured (from planting emergence?)", "answer": "" }
+    ],
+    "Q3": [
+      { "question": "Which calendar system do you use (Gregorian, Julian)?", "answer": "" }
+    ],
+    "Q4": [
+      { "question": "What crop are we discussing?", "answer": "" }
+    ],
+    "Q5": [
+      { "question": "How does yield compare to drought tolerance when both are limited?", "answer": "" }
+    ]
+  }
+}

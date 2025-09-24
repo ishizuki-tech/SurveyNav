@@ -1,0 +1,42 @@
+{
+  "answers": {
+    "Q1": {
+      "question": "What is the typical maturity range for maize in your region?",
+      "answer": "shu"
+    },
+    "Q2": {
+      "question": "How are harvest days measured (from emergence?)",
+      "answer": "linta"
+    },
+    "Q3": {
+      "question": "Do you use the Gregorian calendar?",
+      "answer": "aika"
+    },
+    "Q4": {
+      "question": "What crop are we discussing?",
+      "answer": "ishizuki.tech@"
+    },
+    "Q5": {
+      "question": "How does drought tolerance affect yield compared to yield stability?",
+      "answer": "seen HDMI the the"
+    }
+  },
+  "followups": {
+    "Q1": [
+      { "question": "What is the typical maturity range for maize in your region?", "answer": "" }
+    ],
+    "Q2": [
+      { "question": "How are harvest days measured (from emergence?)", "answer": "" }
+    ],
+    "Q3": [
+      { "question": "Do you use the Gregorian calendar?", "answer": "" }
+    ],
+    "Q4": [
+      { "question": "What crop are we discussing?", "answer": "" }
+    ],
+    "Q5": [
+      { "question": "How does drought tolerance impact yield in early-maturing varieties?", "answer": "seen HDMI the the" },
+      { "question": "How does drought tolerance affect yield compared to yield stability?", "answer": "" }
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "answers": {
+    "Q1": {
+      "question": "What is the typical maturity range for maize in your region?",
+      "answer": "asd"
+    },
+    "Q2": {
+      "question": "In most seasons, how many days does your current maize variety take from planting to harvest?",
+      "answer": "an"
+    },
+    "Q3": {
+      "question": "During the short rains in your area, by which calendar month would you need to harvest to consider it early?",
+      "answer": "ask"
+    },
+    "Q4": {
+      "question": "What maximum yield loss would you accept to harvest earlier—percentage or bags per acre?",
+      "answer": "well"
+    },
+    "Q5": {
+      "question": "When choosing an early-maturing variety, which two factors matter most? (e.g., drought escape, pest escape, double-cropping, market timing)",
+      "answer": "cloud"
+    }
+  },
+  "followups": {
+    "Q1": [
+      { "question": "What is the typical maturity range for maize in your region?", "answer": "" }
+    ]
+  }
+}
