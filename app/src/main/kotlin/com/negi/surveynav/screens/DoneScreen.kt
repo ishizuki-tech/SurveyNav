@@ -1,6 +1,12 @@
 // file: com/negi/surveynav/screens/DoneScreen.kt
 package com.negi.surveynav.screens
 
+import android.content.ContentValues
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -22,40 +28,49 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
+import com.negi.surveynav.net.GitHubConfig
+import com.negi.surveynav.net.GitHubUploadWorker
+import com.negi.surveynav.net.GitHubUploader
 import com.negi.surveynav.vm.SurveyViewModel
 import kotlinx.coroutines.launch
+import java.io.File
 
 /**
- * Done screen (English version).
- * - Lists all questions and answers in insertion order
- * - Also shows follow-up Q&A per node
- * - Provides a "Copy JSON" action to export results
- * - "Restart" delegates to the parent via onRestart
+ * Done screen:
+ * - Lists answers and follow-ups
+ * - Copy / Upload to GitHub
+ * - Optional auto-save to device (no picker)
+ * - Schedule upload when online (WorkManager)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DoneScreen(
     vm: SurveyViewModel,
-    onRestart: () -> Unit
+    onRestart: () -> Unit,
+    gitHubConfig: GitHubConfig? = null,   // pass to enable upload/schedule buttons
+    autoSaveToDevice: Boolean = false     // set true to auto-save once on first show
 ) {
-    // ViewModel state (use safe initials to avoid compile/runtime issues)
     val questions by vm.questions.collectAsState(initial = emptyMap())
-    val answers   by vm.answers.collectAsState(initial = emptyMap())
+    val answers by vm.answers.collectAsState(initial = emptyMap())
     val followups by vm.followups.collectAsState(initial = emptyMap())
 
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val uploading = remember { mutableStateOf(false) }
+    val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
 
-    // Build JSON export text (ordered by questions map)
+    // Build JSON export text (answers + followups)
     val jsonText = remember(questions, answers, followups) {
         buildString {
             append("{\n")
@@ -70,7 +85,6 @@ fun DoneScreen(
                 append("\n")
             }
             append("  },\n")
-
             append("  \"followups\": {\n")
             followups.entries.forEachIndexed { i, (ownerId, list) ->
                 append("    \"").append(escapeJson(ownerId)).append("\": [\n")
@@ -91,6 +105,21 @@ fun DoneScreen(
         }
     }
 
+    // Run once on first composition to auto-save (no picker)
+    val autoSavedOnce = remember { mutableStateOf(false) }
+    LaunchedEffect(autoSaveToDevice, jsonText) {
+        if (autoSaveToDevice && !autoSavedOnce.value) {
+            val fileName = "survey_${System.currentTimeMillis()}.json"
+            runCatching {
+                val result = saveJsonAutomatically(context = context, fileName = fileName, content = jsonText)
+                autoSavedOnce.value = true
+                snackbar.showOnce("Saved to device: ${result.location}")
+            }.onFailure { e ->
+                snackbar.showOnce("Auto-save failed: ${e.message}")
+            }
+        }
+    }
+
     Scaffold(
         topBar = { TopAppBar(title = { Text("Done") }) },
         snackbarHost = { SnackbarHost(hostState = snackbar) }
@@ -102,10 +131,7 @@ fun DoneScreen(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
         ) {
-            Text(
-                "Thanks! Here is your response summary.",
-                style = MaterialTheme.typography.bodyLarge
-            )
+            Text("Thanks! Here is your response summary.", style = MaterialTheme.typography.bodyLarge)
             Spacer(Modifier.height(16.dp))
 
             // Answers
@@ -119,10 +145,7 @@ fun DoneScreen(
                     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                         Text("Q: $q", style = MaterialTheme.typography.bodyMedium)
                         Spacer(Modifier.height(4.dp))
-                        Text(
-                            "A: ${if (a.isBlank()) "(empty)" else a}",
-                            style = MaterialTheme.typography.bodyLarge
-                        )
+                        Text("A: ${if (a.isBlank()) "(empty)" else a}", style = MaterialTheme.typography.bodyLarge)
                     }
                     Divider()
                 }
@@ -161,27 +184,129 @@ fun DoneScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Button(
-                    onClick = {
-                        clipboard.setText(AnnotatedString(jsonText))
-                        scope.launch { snackbar.showOnce("Copied JSON to clipboard") }
-                    }
-                ) { Text("Copy JSON") }
+                // Immediate upload (requires network now)
+                if (gitHubConfig != null) {
+                    Button(
+                        onClick = {
+                            if (uploading.value) return@Button
+                            scope.launch {
+                                uploading.value = true
+                                try {
+                                    val fileName = "survey_${System.currentTimeMillis()}.json"
+                                    val path = "${gitHubConfig.pathPrefix.trimEnd('/')}/$fileName"
+                                    val result = GitHubUploader.uploadJson(
+                                        owner = gitHubConfig.owner,
+                                        repo = gitHubConfig.repo,
+                                        branch = gitHubConfig.branch,
+                                        path = path,
+                                        token = gitHubConfig.token,
+                                        content = jsonText,
+                                        message = "Upload $fileName"
+                                    )
+                                    snackbar.showOnce("Uploaded: ${result.fileUrl ?: result.commitSha}")
+                                } catch (e: Exception) {
+                                    snackbar.showOnce("Upload failed: ${e.message}")
+                                } finally {
+                                    uploading.value = false
+                                }
+                            }
+                        },
+                        enabled = !uploading.value
+                    ) { Text(if (uploading.value) "Uploading..." else "Upload now") }
+                }
 
+                // Schedule upload (runs when online; survives reboot)
+                if (gitHubConfig != null) {
+                    Button(
+                        onClick = {
+                            val fileName = "survey_${System.currentTimeMillis()}.json"
+                            GitHubUploadWorker.enqueue(
+                                context = context,
+                                cfg = gitHubConfig,
+                                fileName = fileName,
+                                jsonContent = jsonText
+                            )
+                            scope.launch { snackbar.showOnce("Upload scheduled (will run when online).") }
+                        }
+                    ) { Text("Upload when Online") }
+                }
+
+                Spacer(Modifier.weight(1f))
                 Button(onClick = onRestart) { Text("Restart") }
             }
 
             Spacer(Modifier.height(12.dp))
-
-            LaunchedEffect(Unit) {
-                snackbar.showOnce("Thank you for your responses")
-            }
+            LaunchedEffect(Unit) { snackbar.showOnce("Thank you for your responses") }
         }
     }
 }
 
 /* ============================================================
- * Small helpers
+ * Auto-save helpers (no user interaction)
+ * ============================================================ */
+
+private data class SaveResult(val uri: Uri?, val file: File?, val location: String)
+
+/**
+ * Saves JSON automatically:
+ * - API 29+ -> MediaStore Downloads/SurveyNav (visible in Files app)
+ * - API 28- -> app-specific external Downloads/SurveyNav (no permission)
+ */
+private fun saveJsonAutomatically(
+    context: android.content.Context,
+    fileName: String,
+    content: String
+): SaveResult {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        saveToDownloadsQPlus(context, fileName, content)
+    } else {
+        saveToAppExternalPreQ(context, fileName, content)
+    }
+}
+
+@RequiresApi(Build.VERSION_CODES.Q)
+private fun saveToDownloadsQPlus(
+    context: android.content.Context,
+    fileName: String,
+    content: String
+): SaveResult {
+    val values = ContentValues().apply {
+        put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+        put(MediaStore.Downloads.MIME_TYPE, "application/json")
+        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/SurveyNav")
+        put(MediaStore.Downloads.IS_PENDING, 1)
+    }
+    val resolver = context.contentResolver
+    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+        ?: throw IllegalStateException("Failed to create download entry")
+    try {
+        resolver.openOutputStream(uri)?.use { it.write(content.toByteArray(Charsets.UTF_8)) }
+            ?: throw IllegalStateException("Failed to open output stream")
+        values.clear()
+        values.put(MediaStore.Downloads.IS_PENDING, 0)
+        resolver.update(uri, values, null, null)
+        return SaveResult(uri = uri, file = null, location = "Downloads/SurveyNav/$fileName")
+    } catch (t: Throwable) {
+        resolver.delete(uri, null, null)
+        throw t
+    }
+}
+
+private fun saveToAppExternalPreQ(
+    context: android.content.Context,
+    fileName: String,
+    content: String
+): SaveResult {
+    val base = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+        ?: context.filesDir
+    val dir = File(base, "SurveyNav").apply { mkdirs() }
+    val file = File(dir, fileName)
+    file.writeText(content, Charsets.UTF_8)
+    return SaveResult(uri = null, file = file, location = file.absolutePath)
+}
+
+/* ============================================================
+ * Snackbar + JSON utils
  * ============================================================ */
 
 private suspend fun SnackbarHostState.showOnce(message: String) {
