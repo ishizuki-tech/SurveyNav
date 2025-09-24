@@ -47,6 +47,7 @@ import com.negi.surveynav.screens.AiScreen
 import com.negi.surveynav.screens.DoneScreen
 import com.negi.surveynav.screens.IntroScreen
 import com.negi.surveynav.screens.ReviewScreen
+import com.negi.surveynav.screens.UploadProgressOverlay
 import com.negi.surveynav.slm.InferenceModel
 import com.negi.surveynav.slm.MediaPipeRepository
 import com.negi.surveynav.slm.Repository
@@ -215,6 +216,9 @@ fun SurveyNavHost(
     Box(Modifier
         .fillMaxSize()
         .imePadding()) {
+
+        UploadProgressOverlay()
+
         NavDisplay(
             backStack = backStack,
             entryDecorators = listOf(

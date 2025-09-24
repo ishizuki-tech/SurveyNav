@@ -34,14 +34,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.negi.surveynav.net.GitHubConfig
-import com.negi.surveynav.net.GitHubUploadWorker
 import com.negi.surveynav.net.GitHubUploader
 import com.negi.surveynav.vm.SurveyViewModel
+import com.negi.surveynav.net.GitHubUploadWorker
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -120,7 +120,7 @@ fun DoneScreen(
         }
     }
 
-    Scaffold(
+    Scaffold(containerColor = Color.Transparent,
         topBar = { TopAppBar(title = { Text("Done") }) },
         snackbarHost = { SnackbarHost(hostState = snackbar) }
     ) { pad ->

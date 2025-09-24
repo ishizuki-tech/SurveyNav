@@ -137,7 +137,7 @@ fun AiScreen(
         val smallStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 14.sp)
 
         Scaffold(
-            containerColor = Color.Transparent,
+            //containerColor = Color.Transparent,
             topBar = {
                 TopAppBar(title = { Text("Question Eval. $nodeId", style = smallStyle) })
             },

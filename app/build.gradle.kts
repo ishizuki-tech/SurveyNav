@@ -134,6 +134,7 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.ui.test.junit4)
+    androidTestImplementation(libs.androidx.work.testing)
 
     // ---- （削除したものの例）----
     // implementation(libs.firebase.crashlytics.buildtools) // ← アプリ依存ではなく、Gradleプラグインで使うもの
