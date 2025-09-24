@@ -1,4 +1,3 @@
-// file: app/src/main/java/com/negi/surveynav/MainActivity.kt
 @file:Suppress("UnusedParameter")
 
 package com.negi.surveynav
@@ -35,12 +34,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavBackStack
-import androidx.navigation3.runtime.entry
+import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSavedStateNavEntryDecorator
+import androidx.navigation3.scene.rememberSceneSetupNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
-import androidx.navigation3.ui.rememberSceneSetupNavEntryDecorator
 import com.negi.surveynav.config.SurveyConfigLoader
 import com.negi.surveynav.net.GitHubConfig
 import com.negi.surveynav.screens.AiScreen
@@ -211,7 +210,7 @@ fun AppNav() {
 fun SurveyNavHost(
     vmSurvey: SurveyViewModel,
     vmAI: AiViewModel,
-    backStack: NavBackStack
+    backStack: NavBackStack<NavKey>
 ) {
     Box(Modifier
         .fillMaxSize()

@@ -71,6 +71,15 @@ android {
         targetCompatibility = JavaVersion.VERSION_11
     }
     kotlinOptions { jvmTarget = "11" }
+
+    packaging {
+        resources {
+            excludes += setOf(
+                "/META-INF/LICENSE.md",
+                "/META-INF/LICENSE-notice.md"
+            )
+        }
+    }
 }
 
 dependencies {
@@ -131,13 +140,14 @@ dependencies {
 
     // ===== Test =====
     testImplementation(libs.junit)
+    testImplementation(libs.mockk)
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.ui.test.junit4)
     androidTestImplementation(libs.androidx.work.testing)
+    androidTestImplementation(libs.mockk.android)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
 
-    // ---- （削除したものの例）----
-    // implementation(libs.firebase.crashlytics.buildtools) // ← アプリ依存ではなく、Gradleプラグインで使うもの
-    // implementation(platform("androidx.compose:compose-bom:2025.09.00")) // ← 固定版を手書きしない
-    // 重複していた serialization/json, okhttp, ui.tooling.preview, activity.compose などを整理
+    testImplementation(kotlin("test"))
 }

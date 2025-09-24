@@ -51,7 +51,7 @@ sealed interface UiEvent {
  * ============================================================ */
 @Suppress("MemberVisibilityCanBePrivate")
 class SurveyViewModel(
-    val nav: NavBackStack,
+    val nav: NavBackStack<NavKey>,
     private val config: SurveyConfig,
 ) : ViewModel() {
 
