@@ -294,7 +294,6 @@ fun SurveyNavHost(
             }
         )
 
-
         BackHandler(enabled = true) {
             vmAI.resetStates()
             vmSurvey.backToPrevious()
