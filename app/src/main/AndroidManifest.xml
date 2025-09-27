@@ -31,7 +31,7 @@
 
         <!-- AndroidManifest.xml -->
         <receiver
-            android:name="com.negi.surveynav.net.UploadRescheduleReceiver"
+            android:name="com.negi.survey.net.UploadRescheduleReceiver"
             android:exported="true"
             android:enabled="true">
             <intent-filter>
@@ -45,7 +45,7 @@
             android:exported="false"
             android:foregroundServiceType="dataSync"
             tools:node="merge"
-            tools:replace="foregroundServiceType" />
+            />
 
     </application>
 </manifest>
