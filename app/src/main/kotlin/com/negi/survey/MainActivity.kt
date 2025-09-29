@@ -47,9 +47,13 @@ import com.negi.survey.screens.DoneScreen
 import com.negi.survey.screens.IntroScreen
 import com.negi.survey.screens.ReviewScreen
 import com.negi.survey.screens.UploadProgressOverlay
+import com.negi.survey.slm.Accelerator
+import com.negi.survey.slm.ConfigKey
 import com.negi.survey.slm.InferenceModel
 import com.negi.survey.slm.MediaPipeRepository
+import com.negi.survey.slm.Model
 import com.negi.survey.slm.Repository
+import com.negi.survey.slm.SLM
 import com.negi.survey.vm.AiViewModel
 import com.negi.survey.vm.AppViewModel
 import com.negi.survey.vm.DlState
@@ -64,6 +68,9 @@ import com.negi.survey.vm.SurveyViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 /* ============================================================
  * Activity：エントリポイント
@@ -167,24 +174,42 @@ fun AppNav() {
             progressText = "Initializing Small Language Model …",
             onErrorMessage = { "Failed to initialize model: ${it.message}" },
             init = {
-                // ★ ここで「待つ」。別スコープで launch しない & Main を使わない
+                val model = Model(
+                    name = "Gemma-3-1B-it",
+                    taskPath = modelFile.absolutePath,
+                    config = mapOf(
+                        ConfigKey.MAX_TOKENS to 2048,
+                        ConfigKey.TOP_K to 40,
+                        ConfigKey.TOP_P to 0.9f,
+                        ConfigKey.TEMPERATURE to 0.7f,
+                        ConfigKey.ACCELERATOR to Accelerator.GPU.label
+                    )
+                )
+                // InferenceModel にセット
+                InferenceModel.getInstance(appContext).setModel(model)
+                // 実際に MediaPipe のエンジン/セッションを作って待つ（非同期APIをsuspendでラップ）
                 withContext(Dispatchers.Default) {
-                    InferenceModel.getInstance(appContext).ensureLoaded(modelFile.absolutePath)
+                    suspendCancellableCoroutine { cont ->
+                        SLM.initialize(appContext, model) { err ->
+                            if (err.isEmpty()) {
+                                cont.resume(Unit)
+                            } else {
+                                cont.resumeWithException(IllegalStateException(err))
+                            }
+                        }
+                    }
                 }
             }
         ) {
             // ★ 初期化成功後のみ通常UIを構築（VM生成もここ）
             val backStack = rememberNavBackStack(FlowHome)
-
             val config = remember(appContext) {
                 SurveyConfigLoader.fromAssets(
                     context = appContext,
                     fileName = "survey_config.json"
                 )
             }
-
             val repo: Repository = remember(appContext) { MediaPipeRepository(appContext) }
-
             val vmSurvey: SurveyViewModel = viewModel(
                 factory = object : ViewModelProvider.Factory {
                     @Suppress("UNCHECKED_CAST")
@@ -192,7 +217,6 @@ fun AppNav() {
                         SurveyViewModel(nav = backStack, config = config) as T
                 }
             )
-
             val vmAI: AiViewModel = viewModel(
                 factory = object : ViewModelProvider.Factory {
                     @Suppress("UNCHECKED_CAST")
@@ -200,7 +224,6 @@ fun AppNav() {
                         AiViewModel(repo) as T
                 }
             )
-
             SurveyNavHost(vmSurvey, vmAI, backStack)
         }
     }
@@ -212,9 +235,11 @@ fun SurveyNavHost(
     vmAI: AiViewModel,
     backStack: NavBackStack<NavKey>
 ) {
-    Box(Modifier
-        .fillMaxSize()
-        .imePadding()) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .imePadding()
+    ) {
 
         UploadProgressOverlay()
 
@@ -277,11 +302,11 @@ fun SurveyNavHost(
                     if (node.type != NodeType.DONE) return@entry
                     val gh = if (BuildConfig.GH_TOKEN.isNotEmpty()) {
                         GitHubConfig(
-                            owner = BuildConfig.GH_OWNER,        // "ishizuki-tech"
-                            repo = BuildConfig.GH_REPO,          // "SurveyNav"
-                            branch = BuildConfig.GH_BRANCH,      // "main"
-                            pathPrefix = BuildConfig.GH_PATH_PREFIX, // "exports"
-                            token = BuildConfig.GH_TOKEN         // PAT
+                            owner = BuildConfig.GH_OWNER,             // "ishizuki-tech"
+                            repo = BuildConfig.GH_REPO,               // "SurveyNav"
+                            branch = BuildConfig.GH_BRANCH,           // "main"
+                            pathPrefix = BuildConfig.GH_PATH_PREFIX,  // "exports"
+                            token = BuildConfig.GH_TOKEN              // PAT
                         )
                     } else null
 

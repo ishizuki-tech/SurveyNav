@@ -3,9 +3,11 @@ package com.negi.survey.vm
 
 import android.content.Context
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.LargeTest
 import com.negi.survey.ModelAssetRule
 import com.negi.survey.slm.InferenceModel
 import com.negi.survey.slm.MediaPipeRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
@@ -14,12 +16,19 @@ import org.junit.*
 import org.junit.Assert.*
 import org.junit.runner.RunWith
 
+/**
+ * Instrumentation tests for AiViewModel with a real on-device model.
+ * Notes:
+ * - We intentionally reuse a single Repository/ViewModel instance across tests to amortize model load.
+ * - Each test run resets ViewModel observable states, so cross-test interference is minimal.
+ * - Marked as @LargeTest because it runs a real model and may take time.
+ */
 @RunWith(AndroidJUnit4::class)
+@LargeTest
 class AiViewModelInstrumentationTest {
 
     @get:Rule val modelRule = ModelAssetRule()
 
-    // —— 単一インスタンスをテスト内で共有 ——
     private lateinit var appCtx: Context
     private lateinit var repo: MediaPipeRepository
     private lateinit var vm: AiViewModel
@@ -27,304 +36,106 @@ class AiViewModelInstrumentationTest {
     @Before
     fun setUp() = runBlocking {
         appCtx = modelRule.context
-        // モデルを先にロード（filesDir 上のパスを Rule が用意）
+
+        // Ensure the native/MediaPipe-backed model is loaded from filesDir (prepared by the Rule).
         InferenceModel.getInstance(appCtx).ensureLoaded(modelRule.internalModel.absolutePath)
 
-        // 既存を再利用（未初期化なら作成）
+        // Lazily reuse singletons across tests to avoid repeated init cost.
         if (!::repo.isInitialized) repo = MediaPipeRepository(appCtx)
         if (!::vm.isInitialized) vm = AiViewModel(repo, timeout_ms = 120_000)
+        else vm.resetStates(keepError = false)
     }
 
     @After
     fun tearDown() {
-        // ここでは close/cancel はしない（次テストでも同一 VM を使う想定）
-        // 必要なら vm.cancel() を追加
+        // We intentionally do not close the model/repo to speed up subsequent tests.
+        // If isolation is desired, call vm.cancel() or resetStates() here.
     }
 
-    @Test
-    fun canUseRealModel() = runBlocking {
-        val job = vm.evaluateAsync("Please score this answer and give a follow-up question.")
+    // ----- Shared test helper -------------------------------------------------
+
+    /**
+     * Runs one end-to-end evaluation and asserts minimal invariants.
+     * Waits for the first stream chunk and for completion (loading=false).
+     */
+    private suspend fun runOnce(
+        prompt: String = "Please score this answer and give a follow-up question.",
+        firstChunkTimeoutMs: Long = 60_000L,
+        completeTimeoutMs: Long = 120_000L,
+        minStreamChars: Int = 8
+    ) {
+        val job: Job = vm.evaluateAsync(prompt)
         try {
-            // 1) まずチャンクが1つ以上来ること
-            withTimeout(60_000) {
-                vm.stream.filter { it.length >= 8 }.first()
+            // 1) At least one streamed chunk should arrive.
+            withTimeout(firstChunkTimeoutMs) {
+                vm.stream.filter { it.length >= minStreamChars }.first()
             }
-            // 2) 完了（loading=false）まで到達
-            withTimeout(120_000) {
+            // 2) Wait until the ViewModel reports completion.
+            withTimeout(completeTimeoutMs) {
                 vm.loading.filter { it == false }.first()
             }
-            // 3) 最低限の整合性チェック（実モデル依存のため緩め）
-            assertNull(vm.error.value)
+            // 3) Basic sanity checks (model-dependent => keep lenient).
+            assertNull("error should be null", vm.error.value)
             val score = vm.score.value ?: fail("score was null")
-            assertTrue(score in 0..100)
-            assertTrue(!vm.followupQuestion.value.isNullOrBlank())
-            assertTrue(vm.stream.value.isNotEmpty())
+            assertTrue("score out of range: $score", score in 0..100)
+            assertTrue("followupQuestion was blank", !vm.followupQuestion.value.isNullOrBlank())
+            assertTrue("stream was empty", vm.stream.value.isNotEmpty())
+            assertNotNull("raw output should be set", vm.raw.value)
         } finally {
-            // 後続テストのために明示キャンセル（評価は完了済みでも安全）
+            // Safe to cancel even if already completed.
             job.cancel()
         }
     }
 
+    // ----- Repeated real-model smoke tests (12 runs) --------------------------
+
+    @Test fun canUseRealModel()   = runBlocking { runOnce() }
+    @Test fun canUseRealModel2()  = runBlocking { runOnce() }
+    @Test fun canUseRealModel3()  = runBlocking { runOnce() }
+    @Test fun canUseRealModel4()  = runBlocking { runOnce() }
+    @Test fun canUseRealModel5()  = runBlocking { runOnce() }
+    @Test fun canUseRealModel6()  = runBlocking { runOnce() }
+    @Test fun canUseRealModel7()  = runBlocking { runOnce() }
+    @Test fun canUseRealModel8()  = runBlocking { runOnce() }
+    @Test fun canUseRealModel9()  = runBlocking { runOnce() }
+    @Test fun canUseRealModel10() = runBlocking { runOnce() }
+    @Test fun canUseRealModel11() = runBlocking { runOnce() }
+    @Test fun canUseRealModel12() = runBlocking { runOnce() }
+
+    // ----- Extra behavior tests (optional but useful) -------------------------
+
     @Test
-    fun canUseRealModel2() = runBlocking {
-        val job = vm.evaluateAsync("Please score this answer and give a follow-up question.")
+    fun cancelsCleanly() = runBlocking {
+        // Start evaluation, wait until it begins streaming, then cancel.
+        val job = vm.evaluateAsync("Please score and then keep chatting...")
         try {
-            // 1) まずチャンクが1つ以上来ること
-            withTimeout(60_000) {
-                vm.stream.filter { it.length >= 8 }.first()
+            withTimeout(30_000) {
+                vm.stream.filter { it.isNotEmpty() }.first()
             }
-            // 2) 完了（loading=false）まで到達
-            withTimeout(120_000) {
-                vm.loading.filter { it == false }.first()
-            }
-            // 3) 最低限の整合性チェック（実モデル依存のため緩め）
-            assertNull(vm.error.value)
-            val score = vm.score.value ?: fail("score was null")
-            assertTrue(score in 0..100)
-            assertTrue(!vm.followupQuestion.value.isNullOrBlank())
-            assertTrue(vm.stream.value.isNotEmpty())
         } finally {
-            // 後続テストのために明示キャンセル（評価は完了済みでも安全）
+            vm.cancel()
             job.cancel()
         }
+        // Ensure VM reports completion and 'cancelled' error.
+        withTimeout(30_000) {
+            vm.loading.filter { it == false }.first()
+        }
+        assertEquals("cancelled", vm.error.value)
     }
 
     @Test
-    fun canUseRealModel3() = runBlocking {
-        val job = vm.evaluateAsync("Please score this answer and give a follow-up question.")
+    fun timesOutProperly() = runBlocking {
+        // Run with a very small timeout to force timeout path.
+        val job = vm.evaluateAsync(
+            prompt = "Please score this answer and give a follow-up question.",
+            timeoutMs = 1_000 // 1s
+        )
         try {
-            // 1) まずチャンクが1つ以上来ること
-            withTimeout(60_000) {
-                vm.stream.filter { it.length >= 8 }.first()
-            }
-            // 2) 完了（loading=false）まで到達
-            withTimeout(120_000) {
+            withTimeout(30_000) {
                 vm.loading.filter { it == false }.first()
             }
-            // 3) 最低限の整合性チェック（実モデル依存のため緩め）
-            assertNull(vm.error.value)
-            val score = vm.score.value ?: fail("score was null")
-            assertTrue(score in 0..100)
-            assertTrue(!vm.followupQuestion.value.isNullOrBlank())
-            assertTrue(vm.stream.value.isNotEmpty())
+            assertEquals("timeout", vm.error.value)
         } finally {
-            // 後続テストのために明示キャンセル（評価は完了済みでも安全）
-            job.cancel()
-        }
-    }
-
-    @Test
-    fun canUseRealModel4() = runBlocking {
-        val job = vm.evaluateAsync("Please score this answer and give a follow-up question.")
-        try {
-            // 1) まずチャンクが1つ以上来ること
-            withTimeout(60_000) {
-                vm.stream.filter { it.length >= 8 }.first()
-            }
-            // 2) 完了（loading=false）まで到達
-            withTimeout(120_000) {
-                vm.loading.filter { it == false }.first()
-            }
-            // 3) 最低限の整合性チェック（実モデル依存のため緩め）
-            assertNull(vm.error.value)
-            val score = vm.score.value ?: fail("score was null")
-            assertTrue(score in 0..100)
-            assertTrue(!vm.followupQuestion.value.isNullOrBlank())
-            assertTrue(vm.stream.value.isNotEmpty())
-        } finally {
-            // 後続テストのために明示キャンセル（評価は完了済みでも安全）
-            job.cancel()
-        }
-    }
-
-    @Test
-    fun canUseRealModel5() = runBlocking {
-        val job = vm.evaluateAsync("Please score this answer and give a follow-up question.")
-        try {
-            // 1) まずチャンクが1つ以上来ること
-            withTimeout(60_000) {
-                vm.stream.filter { it.length >= 8 }.first()
-            }
-            // 2) 完了（loading=false）まで到達
-            withTimeout(120_000) {
-                vm.loading.filter { it == false }.first()
-            }
-            // 3) 最低限の整合性チェック（実モデル依存のため緩め）
-            assertNull(vm.error.value)
-            val score = vm.score.value ?: fail("score was null")
-            assertTrue(score in 0..100)
-            assertTrue(!vm.followupQuestion.value.isNullOrBlank())
-            assertTrue(vm.stream.value.isNotEmpty())
-        } finally {
-            // 後続テストのために明示キャンセル（評価は完了済みでも安全）
-            job.cancel()
-        }
-    }
-
-    @Test
-    fun canUseRealModel6() = runBlocking {
-        val job = vm.evaluateAsync("Please score this answer and give a follow-up question.")
-        try {
-            // 1) まずチャンクが1つ以上来ること
-            withTimeout(60_000) {
-                vm.stream.filter { it.length >= 8 }.first()
-            }
-            // 2) 完了（loading=false）まで到達
-            withTimeout(120_000) {
-                vm.loading.filter { it == false }.first()
-            }
-            // 3) 最低限の整合性チェック（実モデル依存のため緩め）
-            assertNull(vm.error.value)
-            val score = vm.score.value ?: fail("score was null")
-            assertTrue(score in 0..100)
-            assertTrue(!vm.followupQuestion.value.isNullOrBlank())
-            assertTrue(vm.stream.value.isNotEmpty())
-        } finally {
-            // 後続テストのために明示キャンセル（評価は完了済みでも安全）
-            job.cancel()
-        }
-    }
-
-    @Test
-    fun canUseRealModel7() = runBlocking {
-        val job = vm.evaluateAsync("Please score this answer and give a follow-up question.")
-        try {
-            // 1) まずチャンクが1つ以上来ること
-            withTimeout(60_000) {
-                vm.stream.filter { it.length >= 8 }.first()
-            }
-            // 2) 完了（loading=false）まで到達
-            withTimeout(120_000) {
-                vm.loading.filter { it == false }.first()
-            }
-            // 3) 最低限の整合性チェック（実モデル依存のため緩め）
-            assertNull(vm.error.value)
-            val score = vm.score.value ?: fail("score was null")
-            assertTrue(score in 0..100)
-            assertTrue(!vm.followupQuestion.value.isNullOrBlank())
-            assertTrue(vm.stream.value.isNotEmpty())
-        } finally {
-            // 後続テストのために明示キャンセル（評価は完了済みでも安全）
-            job.cancel()
-        }
-    }
-
-    @Test
-    fun canUseRealModel8() = runBlocking {
-        val job = vm.evaluateAsync("Please score this answer and give a follow-up question.")
-        try {
-            // 1) まずチャンクが1つ以上来ること
-            withTimeout(60_000) {
-                vm.stream.filter { it.length >= 8 }.first()
-            }
-            // 2) 完了（loading=false）まで到達
-            withTimeout(120_000) {
-                vm.loading.filter { it == false }.first()
-            }
-            // 3) 最低限の整合性チェック（実モデル依存のため緩め）
-            assertNull(vm.error.value)
-            val score = vm.score.value ?: fail("score was null")
-            assertTrue(score in 0..100)
-            assertTrue(!vm.followupQuestion.value.isNullOrBlank())
-            assertTrue(vm.stream.value.isNotEmpty())
-        } finally {
-            // 後続テストのために明示キャンセル（評価は完了済みでも安全）
-            job.cancel()
-        }
-    }
-
-    @Test
-    fun canUseRealModel9() = runBlocking {
-        val job = vm.evaluateAsync("Please score this answer and give a follow-up question.")
-        try {
-            // 1) まずチャンクが1つ以上来ること
-            withTimeout(60_000) {
-                vm.stream.filter { it.length >= 8 }.first()
-            }
-            // 2) 完了（loading=false）まで到達
-            withTimeout(120_000) {
-                vm.loading.filter { it == false }.first()
-            }
-            // 3) 最低限の整合性チェック（実モデル依存のため緩め）
-            assertNull(vm.error.value)
-            val score = vm.score.value ?: fail("score was null")
-            assertTrue(score in 0..100)
-            assertTrue(!vm.followupQuestion.value.isNullOrBlank())
-            assertTrue(vm.stream.value.isNotEmpty())
-        } finally {
-            // 後続テストのために明示キャンセル（評価は完了済みでも安全）
-            job.cancel()
-        }
-    }
-
-    @Test
-    fun canUseRealModel10() = runBlocking {
-        val job = vm.evaluateAsync("Please score this answer and give a follow-up question.")
-        try {
-            // 1) まずチャンクが1つ以上来ること
-            withTimeout(60_000) {
-                vm.stream.filter { it.length >= 8 }.first()
-            }
-            // 2) 完了（loading=false）まで到達
-            withTimeout(120_000) {
-                vm.loading.filter { it == false }.first()
-            }
-            // 3) 最低限の整合性チェック（実モデル依存のため緩め）
-            assertNull(vm.error.value)
-            val score = vm.score.value ?: fail("score was null")
-            assertTrue(score in 0..100)
-            assertTrue(!vm.followupQuestion.value.isNullOrBlank())
-            assertTrue(vm.stream.value.isNotEmpty())
-        } finally {
-            // 後続テストのために明示キャンセル（評価は完了済みでも安全）
-            job.cancel()
-        }
-    }
-
-    @Test
-    fun canUseRealModel11() = runBlocking {
-        val job = vm.evaluateAsync("Please score this answer and give a follow-up question.")
-        try {
-            // 1) まずチャンクが1つ以上来ること
-            withTimeout(60_000) {
-                vm.stream.filter { it.length >= 8 }.first()
-            }
-            // 2) 完了（loading=false）まで到達
-            withTimeout(120_000) {
-                vm.loading.filter { it == false }.first()
-            }
-            // 3) 最低限の整合性チェック（実モデル依存のため緩め）
-            assertNull(vm.error.value)
-            val score = vm.score.value ?: fail("score was null")
-            assertTrue(score in 0..100)
-            assertTrue(!vm.followupQuestion.value.isNullOrBlank())
-            assertTrue(vm.stream.value.isNotEmpty())
-        } finally {
-            // 後続テストのために明示キャンセル（評価は完了済みでも安全）
-            job.cancel()
-        }
-    }
-
-    @Test
-    fun canUseRealModel12() = runBlocking {
-        val job = vm.evaluateAsync("Please score this answer and give a follow-up question.")
-        try {
-            // 1) まずチャンクが1つ以上来ること
-            withTimeout(60_000) {
-                vm.stream.filter { it.length >= 8 }.first()
-            }
-            // 2) 完了（loading=false）まで到達
-            withTimeout(120_000) {
-                vm.loading.filter { it == false }.first()
-            }
-            // 3) 最低限の整合性チェック（実モデル依存のため緩め）
-            assertNull(vm.error.value)
-            val score = vm.score.value ?: fail("score was null")
-            assertTrue(score in 0..100)
-            assertTrue(!vm.followupQuestion.value.isNullOrBlank())
-            assertTrue(vm.stream.value.isNotEmpty())
-        } finally {
-            // 後続テストのために明示キャンセル（評価は完了済みでも安全）
             job.cancel()
         }
     }

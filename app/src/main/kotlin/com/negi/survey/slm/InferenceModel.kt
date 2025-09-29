@@ -1,628 +1,281 @@
-// file: app/src/main/java/com/negi/survey/slm/InferenceModel.kt
+@file:Suppress("MemberVisibilityCanBePrivate", "unused")
+
 package com.negi.survey.slm
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.util.Log
-import com.google.common.util.concurrent.ListenableFuture
-import com.google.mediapipe.tasks.genai.llminference.LlmInference
-import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
-import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import java.io.File
-import java.io.FileOutputStream
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import java.util.concurrent.RejectedExecutionException
-import java.util.concurrent.Semaphore
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.math.min
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+
+/* ============================================================
+   InferenceModel — Repository-facing wrapper over SLM (text-only)
+   - Provides pre-initialization via ensureLoaded(), streaming via startRequest(),
+     and control APIs cancelRequest() / close().
+   - Assumes single concurrent generation; SLM enforces serialization internally.
+   - This file adds English-only KDoc and explanatory inline comments.
+   ============================================================ */
+
+/* -----------------------
+   Constants / Defaults
+   ----------------------- */
+
+private const val TAG = "InferenceModel"
+private const val PARTIAL_BUFFER_CAPACITY = 64
+private const val NOT_INITIALIZED_MSG = "Model is not initialized. Call ensureLoaded() first."
 
 /**
- * MediaPipe LiteRT LLM ラッパ（シングルトン）
- * - 同時実行は 1 件に制限（LiteRT の安全運用）
- * - キャンセルは “ソフトキャンセル”（UI 側で無視）。ネイティブは自然終了→完了時に close。
- * - セッション/解放/セマフォ解放は必ず handleFutureCompletion() だけで行う。
+ * A lightweight wrapper that manages inference start/cancel and exposes partial
+ * results as a [SharedFlow].
+ *
+ * Intended Repository-facing API:
+ * - [startRequest]: begin streaming and return a requestId
+ * - [partialResults]: stream of (requestId, text, done)
+ * - [cancelRequest]: cancel an in-flight request by requestId
+ *
+ * Initialization flow:
+ * - Call [setModel] then [ensureLoaded] at app startup. [ensureLoaded] suspends
+ *   until the model is ready.
+ * - [startRequest] does not wait for initialization; if the model is not ready,
+ *   it immediately emits a terminal error to the stream.
+ *
+ * Threading/Lifecycle:
+ * - [partialResults] may be emitted from background threads; switch to the main
+ *   thread on the consumer side for UI updates.
+ * - [getInstance] retains ApplicationContext to avoid leaking UI components.
  */
-class InferenceModel private constructor(appCtx: Context) {
-
-    private val TAG = "InferenceModel"
-
-    companion object {
-        private const val MODEL_ASSET_NAME = "gemma-3n-E4B-it-int4.litertlm"
-
-        private const val MAX_TOKENS = 512
-        private const val DEFAULT_TOP_K = 20
-        private const val DEFAULT_TOP_P = 0.98f
-        private const val DEFAULT_TEMPERATURE = 0.0f
-
-        private const val EMITTED_SO_FAR_MAX = 100_000
-        private const val FUTURE_GET_TIMEOUT_SECONDS = 25L
-        private const val CHUNK_MAX_LEN = 200
-        private const val CHUNK_DELAY_MS = 15L
-
-        // ★ LiteRT の安定運用のため 1 に固定（並列生成しない）
-        private const val MAX_CONCURRENT_REQUESTS = 1
-
-        private const val PENDING_EMITS_MAX = 25
-
-        @Volatile private var instance: InferenceModel? = null
-
-        fun getInstance(context: Context): InferenceModel {
-            return instance ?: synchronized(this) {
-                instance ?: InferenceModel(context.applicationContext).also {
-                    instance = it
-                    Log.i("InferenceModel", "InferenceModel instance created: ${it.hashCode()}")
-                }
-            }
-        }
-    }
-
-    data class PartialResult(val requestId: String, val text: String, val done: Boolean)
-
-    private val emitScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-
-    private val nativeCloseExecutor = Executors.newSingleThreadExecutor {
-        Thread(it, "InferenceModel-NativeClose").apply { isDaemon = true }
-    }
-    private val listenerExecutor: ExecutorService = Executors.newSingleThreadExecutor {
-        Thread(it, "InferenceModel-Listener").apply { isDaemon = true }
-    }
-    private val emitRetryExecutor = Executors.newScheduledThreadPool(1) {
-        Thread(it, "InferenceModel-EmitRetry").apply { isDaemon = true }
-    }
-
-    private val appContext = appCtx.applicationContext
-
-    private val _partialResults =
-        MutableSharedFlow<PartialResult>(extraBufferCapacity = 64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
-    val partialResults: SharedFlow<PartialResult> = _partialResults.asSharedFlow()
-
-    @Volatile private var llm: LlmInference? = null
-    @Volatile private var loadedPath: String? = null
-
-    private val closed = AtomicBoolean(false)
-    private val loaded = AtomicBoolean(false)
-    private val loadMutex = Mutex()
-
-    private data class RequestState(
-        val requestId: String,
-        val session: LlmInferenceSession,
-        val future: ListenableFuture<String>,
-        val doneEmitted: AtomicBoolean = AtomicBoolean(false),
-        val lastPartial: AtomicReference<String?> = AtomicReference(""),
-        val lastEmitted: AtomicReference<String?> = AtomicReference(""),
-        val emittedSoFarBuilder: StringBuilder = StringBuilder(),
-        val emittedLock: Any = Any(),
-        val finalEmitted: AtomicBoolean = AtomicBoolean(false),
-        val closed: AtomicBoolean = AtomicBoolean(false),
-        val cancelled: AtomicBoolean = AtomicBoolean(false)
-    ) {
-        fun appendEmitted(part: String, maxLen: Int) {
-            synchronized(emittedLock) {
-                emittedSoFarBuilder.append(part)
-                if (emittedSoFarBuilder.length > maxLen) {
-                    val keep = emittedSoFarBuilder.substring(emittedSoFarBuilder.length - maxLen)
-                    emittedSoFarBuilder.setLength(0)
-                    emittedSoFarBuilder.append(keep)
-                }
-            }
-        }
-        fun getEmittedSoFar(): String = synchronized(emittedLock) { emittedSoFarBuilder.toString() }
-    }
-
-    private val requests = ConcurrentHashMap<String, RequestState>()
-    private val pendingEmits: ConcurrentLinkedQueue<PartialResult> = ConcurrentLinkedQueue()
-
-    @Volatile private var emitFailCount = 0L
-    @Volatile private var totalPartialCount = 0L
-    @Volatile private var droppedEmitsCount = 0L
-
-    private val requestSemaphore = Semaphore(MAX_CONCURRENT_REQUESTS)
-
-    init {
-        emitRetryExecutor.scheduleWithFixedDelay({
-            try { drainPendingEmits() } catch (t: Throwable) { Log.w(TAG, "emitRetry failed", t) }
-        }, 50, 50, TimeUnit.MILLISECONDS)
-    }
-
-    /* ======================= Load / Close ======================= */
-
-    suspend fun ensureLoaded(path: String? = null) {
-        if (closed.get()) throw IllegalStateException("InferenceModel is closed")
-
-        // すでにロード済み & パス一致なら即 return
-        if (loaded.get() && (path == null || path == loadedPath)) return
-
-        // パスが変わった場合は一旦クローズしてフラグを戻す
-        if (loaded.get() && path != null && path != loadedPath) {
-            loadMutex.withLock {
-                if (path == loadedPath) return
-                safeCloseLlm()
-                llm = null
-                loaded.set(false)
-                loadedPath = null
-            }
-        }
-
-        loadMutex.withLock {
-            if (loaded.get() && (path == null || path == loadedPath)) return@withLock
-
-            val fileNameOrPath = path ?: MODEL_ASSET_NAME
-            val taskPath = path ?: withContext(Dispatchers.IO) {
-                ensureModelPresent(appContext, fileNameOrPath)
-            }
-
-            try {
-                // 重い生成はバックグラウンド（GPU → だめなら CPU）
-                val created = withContext(Dispatchers.Default) {
-                    val gpuOpts = LlmInference.LlmInferenceOptions.builder()
-                        .setModelPath(taskPath)
-                        .setMaxTokens(MAX_TOKENS)
-                        .setPreferredBackend(LlmInference.Backend.GPU)
-                        .build()
-                    try {
-                        LlmInference.createFromOptions(appContext, gpuOpts)
-                    } catch (_: Throwable) {
-                        val cpuOpts = LlmInference.LlmInferenceOptions.builder()
-                            .setModelPath(taskPath)
-                            .setMaxTokens(MAX_TOKENS)
-                            .setPreferredBackend(LlmInference.Backend.CPU)
-                            .build()
-                        LlmInference.createFromOptions(appContext, cpuOpts)
-                    }
-                }
-
-                llm = created
-                loaded.set(true)
-                loadedPath = taskPath
-                Log.i(TAG, "InferenceModel loaded (path=$taskPath, llm=${llm?.hashCode()})")
-
-            } catch (e: Throwable) {
-                Log.e(TAG, "Failed to initialize LlmInference", e)
-                runCatching { safeCloseLlm() }
-                llm = null
-                loaded.set(false)
-                loadedPath = null
-                throw e
-            }
-        }
-    }
-
-    private suspend fun safeCloseLlm() = withContext(Dispatchers.Default) {
-        try { llm?.close() } catch (_: Throwable) {}
-    }
-    private fun requireLlm(): LlmInference =
-        llm ?: throw IllegalStateException("InferenceModel not loaded: call ensureLoaded()")
-
-    /* ======================= Session ======================= */
-
-    private fun sanitizeTopP(raw: Float): Float =
-        when {
-            raw.isNaN() -> DEFAULT_TOP_P
-            raw > 1f && raw <= 100f -> (raw / 100f).coerceIn(0f, 1f)
-            else -> raw.coerceIn(0f, 1f)
-        }
-
-    private fun sanitizeTopK(raw: Int): Int = raw.coerceAtLeast(0)
-
-    private fun sanitizeTemperature(raw: Float): Float =
-        if (raw.isNaN()) DEFAULT_TEMPERATURE else raw.coerceIn(0f, 5f)
-
-    private fun newSession(
-        topK: Int,
-        topP: Float,
-        temperature: Float,
-        randomSeed: Int? = null
-    ): LlmInferenceSession {
-
-        val sTopK = sanitizeTopK(topK)
-        val sTopP = sanitizeTopP(topP)
-        val sTemp = sanitizeTemperature(temperature)
-
-        if (sTopK != topK || sTopP != topP || sTemp != temperature) {
-            Log.w(TAG, "newSession sanitized: topK=$sTopK topP=$sTopP temp=$sTemp (was $topK/$topP/$temperature)")
-        }
-
-        val builder = LlmInferenceSession.LlmInferenceSessionOptions.builder()
-            .setTopK(sTopK)
-            .setTopP(sTopP)
-            .setTemperature(sTemp)
-        if (randomSeed != null) builder.setRandomSeed(randomSeed)
-
-        return try {
-            val s = LlmInferenceSession.createFromOptions(requireLlm(), builder.build())
-            Log.i(TAG, "New session: ${s.hashCode()} (topK=$sTopK topP=$sTopP temp=$sTemp)")
-            s
-        } catch (e: Exception) {
-            Log.e(TAG, "create session failed", e)
-            throw e
-        }
-    }
-
-    /* ======================= Request ======================= */
-
-    fun startRequest(
-        prompt: String,
-        topK: Int = DEFAULT_TOP_K,
-        topP: Float = DEFAULT_TOP_P,
-        temperature: Float = DEFAULT_TEMPERATURE,
-        randomSeed: Int? = null
-    ): String {
-        if (closed.get()) throw IllegalStateException("InferenceModel is closed")
-
-        val requestId = UUID.randomUUID().toString()
-
-        Log.d(TAG, " ")
-        Log.d(TAG, "========================================================================")
-        Log.d(TAG, "startRequest(requestId=$requestId) thread=${Thread.currentThread().name}")
-        Log.d(TAG, "Prompt (truncated 512): ${prompt.take(512).replace("\n", "\\n")}")
-
-        val acquired = try {
-            requestSemaphore.tryAcquire(200, TimeUnit.MILLISECONDS)
-        } catch (ie: InterruptedException) {
-            Thread.currentThread().interrupt(); false
-        }
-        if (!acquired) {
-            Log.w(TAG, "Too many concurrent requests; rejecting request=$requestId")
-            return requestId
-        }
-
-        val localSession = try {
-            newSession(topK, topP, temperature, randomSeed)
-        } catch (e: Throwable) {
-            Log.e(TAG, "Failed to create session for request=$requestId", e)
-            requestSemaphore.release()
-            return requestId
-        }
-
-        try {
-            localSession.addQueryChunk(prompt)
-        } catch (e: Throwable) {
-            Log.e(TAG, "addQueryChunk failed for request=$requestId session=${localSession.hashCode()}", e)
-            runCatching { localSession.close() }
-            requestSemaphore.release()
-            return requestId
-        }
-
-        val doneEmitted = AtomicBoolean(false)
-        val lastPartial = AtomicReference<String?>("")
-        val lastEmitted = AtomicReference<String?>("")
-
-        try {
-            val future: ListenableFuture<String> =
-                localSession.generateResponseAsync { partial: String, done: Boolean ->
-                    // ★ キャンセル済みなら UI へは何も流さず即 return（ソフトキャンセル）
-                    val st = requests[requestId] ?: return@generateResponseAsync
-                    if (st.cancelled.get()) return@generateResponseAsync
-
-                    Log.d(TAG, "  partial = $partial    done = $done")
-                    try {
-                        totalPartialCount++
-                        lastPartial.set(partial)
-                        val state = requests[requestId]
-                        if (state != null && state.finalEmitted.get()) {
-                            Log.d(TAG, "callback: final emission in progress -> skip")
-                        } else {
-                            val emitted = tryEmitPartial(PartialResult(requestId, partial, done))
-                            if (emitted) {
-                                lastEmitted.set(partial)
-                                requests[requestId]?.appendEmitted(partial, EMITTED_SO_FAR_MAX)
-                            } else {
-                                Log.w(TAG, "failed to emit partial -> queued")
-                            }
-                        }
-                        if (done) {
-                            if (doneEmitted.compareAndSet(false, true)) {
-                                Log.i(TAG, "done=true (callback) request=$requestId; cleanup deferred")
-                            }
-                        }
-                    } catch (e: Throwable) {
-                        Log.e(TAG, "Exception in callback for request=$requestId", e)
-                    }
-                }
-
-            val state = RequestState(requestId, localSession, future, doneEmitted, lastPartial, lastEmitted)
-            requests[requestId] = state
-            Log.i(TAG, "Stored request state request=$requestId session=${localSession.hashCode()} future=${future.hashCode()} totalRequests=${requests.size}")
-
-            try {
-                future.addListener(Runnable { handleFutureCompletion(requestId, state) }, listenerExecutor)
-            } catch (ree: RejectedExecutionException) {
-                Log.w(TAG, "listenerExecutor rejected addListener; fallback submit", ree)
-                runCatching { listenerExecutor.submit { handleFutureCompletion(requestId, state) } }
-                    .onFailure { Log.e(TAG, "Fallback listener submit failed", it) }
-            }
-
-        } catch (e: Throwable) {
-            Log.e(TAG, "startRequest failed for request=$requestId", e)
-            runCatching { localSession.close() }
-            requests.remove(requestId)
-            requestSemaphore.release()
-            return requestId
-        }
-
-        return requestId
-    }
-
-    // --- InferenceModel.kt: handleFutureCompletion() 冒頭ロジックを少し変更 ---
-    private fun handleFutureCompletion(requestId: String, state: RequestState) {
-        try {
-            Log.d(TAG, "Future listener invoked for request=$requestId (isDone=${state.future.isDone} isCancelled=${state.future.isCancelled})")
-
-            val wasCancelled = state.cancelled.get()
-
-            // キャンセルされていない時だけ最終テキストの計算/エミットを行う
-            if (!wasCancelled && state.doneEmitted.compareAndSet(false, true)) {
-                var finalText: String? = state.lastPartial.get()
-                if (finalText.isNullOrEmpty()) {
-                    finalText = runCatching { state.future.get(FUTURE_GET_TIMEOUT_SECONDS, TimeUnit.SECONDS) }
-                        .onFailure { Log.w(TAG, "future.get() failed for request=$requestId", it) }
-                        .getOrNull() ?: ""
-                }
-
-                if (finalText.isEmpty()) {
-                    // キャンセルでなく、かつ最終が空のときのみプレースホルダ
-                    Log.w(TAG, "finalText empty, emitting placeholder for request=$requestId")
-                    tryEmitPartial(PartialResult(requestId, "__NO_OUTPUT__", true))
-                } else {
-                    state.finalEmitted.set(true)
-                    val already = state.getEmittedSoFar()
-                    Log.d(TAG, "finalText.len=${finalText.length} emittedSoFar.len=${already.length} request=$requestId")
-
-                    val toEmit = computeMissingSuffixTokenAware(already, finalText)
-                    if (toEmit.isEmpty()) {
-                        Log.i(TAG, "No missing suffix -> done marker only request=$requestId")
-                        tryEmitPartial(PartialResult(requestId, "", true))
-                    } else {
-                        Log.i(TAG, "Emitting missing suffix.len=${toEmit.length} request=$requestId")
-                        chunkAndEmitFinalWithState(requestId, finalText, toEmit, state, CHUNK_DELAY_MS)
-                    }
-                }
-            } else {
-                Log.d(TAG, "skip final emission (cancelled=$wasCancelled) request=$requestId")
-            }
-        } catch (e: Throwable) {
-            Log.e(TAG, "Exception in future listener for request=$requestId", e)
-        } finally {
-            // ★ 後片付け：クローズは遅延して実行（WaitUntilIdle のレース回避）
-            if (requests[requestId]?.closed?.compareAndSet(false, true) == true) {
-                val st = requests[requestId]!!
-                nativeCloseExecutor.submit {
-                    try {
-                        // 生成完了を確実に可視化（失敗しても無視）
-                        runCatching { st.future.get(1, TimeUnit.SECONDS) }
-                        // 少し待ってから close（200–300ms 程度。必要なら増やす）
-                        try { Thread.sleep(300) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
-                        runCatching { st.session.close() }
-                        Log.i(TAG, "Closed session: ${st.session.hashCode()} (delayed)")
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "Error in nativeCloseExecutor for request=$requestId", t)
-                    }
-                }
-            }
-            if (requests.remove(requestId) != null) {
-                Log.i(TAG, "Request cleaned request=$requestId remaining=${requests.size}")
-                requestSemaphore.release()
-            }
-        }
-    }
-
-    private fun computeMissingSuffixTokenAware(already: String, finalText: String): String {
-        val a = already.trim()
-        val f = finalText.trim()
-        if (a.isEmpty()) return f
-        if (a == f) return ""
-        val maxCheckLen = min(a.length, 1024)
-        val startIdx = maxOf(0, a.length - maxCheckLen)
-        for (len in (a.length - startIdx) downTo 1) {
-            val suffix = a.substring(a.length - len)
-            val idx = f.lastIndexOf(suffix)
-            if (idx >= 0) {
-                val emitStart = idx + suffix.length
-                return if (emitStart >= f.length) "" else f.substring(emitStart).trimStart()
-            }
-        }
-        val occ = f.indexOf(a)
-        if (occ >= 0) {
-            val emitStart = occ + a.length
-            return if (emitStart >= f.length) "" else f.substring(emitStart).trimStart()
-        }
-        if (f.startsWith(a)) return f.removePrefix(a).trimStart()
-        return f
-    }
-
-    private fun chunkAndEmitFinalWithState(
-        requestId: String,
-        finalText: String,
-        toEmit: String,
-        state: RequestState,
-        emitDelayMs: Long = 20L
-    ) {
-        emitScope.launch {
-            try {
-                val sentenceRegex = Regex("(?<=[。．！？!?]|\\.|\\!|\\?)\\s*")
-                val pieces: List<String> = sentenceRegex.split(toEmit).map { it.trim() }.filter { it.isNotEmpty() }
-                val chunks = if (pieces.isNotEmpty()) pieces else toEmit.chunked(CHUNK_MAX_LEN)
-                for ((i, chunk) in chunks.withIndex()) {
-                    if (state.cancelled.get()) break
-                    val isLast = (i == chunks.lastIndex)
-                    val emitted = tryEmitPartial(PartialResult(requestId, chunk, isLast))
-                    if (emitted) {
-                        state.appendEmitted(chunk, EMITTED_SO_FAR_MAX)
-                        state.lastEmitted.set(chunk)
-                    } else {
-                        Log.w(TAG, "chunk emit failed -> queued request=$requestId len=${chunk.length}")
-                    }
-                    Log.d(TAG, "chunk emitted request=$requestId len=${chunk.length} done=$isLast")
-                    if (emitDelayMs > 0 && !isLast) delay(emitDelayMs)
-                }
-                val cur = state.getEmittedSoFar()
-                if (!cur.endsWith(finalText)) {
-                    state.appendEmitted(
-                        finalText.substring(maxOf(0, finalText.length - EMITTED_SO_FAR_MAX)),
-                        EMITTED_SO_FAR_MAX
-                    )
-                }
-            } catch (e: Throwable) {
-                Log.e(TAG, "chunkAndEmitFinal error request=$requestId", e)
-                tryEmitPartial(PartialResult(requestId, finalText, true))
-                state.appendEmitted(finalText, EMITTED_SO_FAR_MAX)
-                state.lastEmitted.set(finalText)
-            }
-        }
-    }
-
-    /* ======================= Emit queue ======================= */
-
-    private fun tryEmitPartial(pr: PartialResult): Boolean {
-        return try {
-            val ok = _partialResults.tryEmit(pr)
-            if (!ok) {
-                if (pendingEmits.size >= PENDING_EMITS_MAX) {
-                    pendingEmits.poll()?.let {
-                        droppedEmitsCount++
-                        Log.w(TAG, "pendingEmits overflow: dropped oldest partial request=${it.requestId} len=${it.text.length}")
-                    }
-                }
-                pendingEmits.add(pr)
-                emitFailCount++
-            }
-            ok
-        } catch (t: Throwable) {
-            Log.w(TAG, "tryEmitPartial error", t)
-            if (pendingEmits.size >= PENDING_EMITS_MAX) {
-                pendingEmits.poll()?.let {
-                    droppedEmitsCount++
-                    Log.w(TAG, "pendingEmits overflow (exception path): dropped oldest request=${it.requestId}")
-                }
-            }
-            pendingEmits.add(pr)
-            emitFailCount++
-            false
-        }
-    }
-
-    private fun drainPendingEmits() {
-        var attempts = 0
-        while (attempts < 200) {
-            val pr = pendingEmits.peek() ?: break
-            val ok = runCatching { _partialResults.tryEmit(pr) }.getOrDefault(false)
-            if (ok) pendingEmits.remove() else break
-            attempts++
-        }
-    }
-
-    /* ======================= Cancel / Close ======================= */
+class InferenceModel private constructor(
+    private val appContext: Context
+) {
 
     /**
-     * ソフトキャンセル：
-     * - ネイティブを止めず（cancel/cancelGenerate はしない）、UI 側へはキャンセル済みを即通知。
-     * - セッションの close / セマフォ解放は完了ハンドラで行う。
+     * A single partial response from the model.
+     *
+     * @property requestId Identifier of the streaming request that produced this result.
+     * @property text Text chunk from the model; may be empty.
+     * @property done True when the stream has completed.
      */
-    fun cancelRequest(requestId: String) {
-        val state: RequestState? = requests[requestId]
-        if (state == null) {
-            Log.w(TAG, "cancelRequest: no such requestId=$requestId"); return
-        }
-        Log.i(TAG, "cancelRequest marked cancelled request=$requestId")
-        state.cancelled.set(true)
-        _partialResults.tryEmit(PartialResult(requestId, "__CANCELLED__", true))
-        // 後片付けは handleFutureCompletion に一任
+    data class PartialResult(
+        val requestId: String,
+        val text: String,
+        val done: Boolean
+    )
+
+    companion object {
+        @Volatile private var INSTANCE: InferenceModel? = null
+
+        /**
+         * Get or create the singleton instance.
+         *
+         * Application context is stored internally to avoid lifecycle leaks.
+         *
+         * @param context Any context (converted to applicationContext internally).
+         * @return The singleton [InferenceModel].
+         */
+        fun getInstance(context: Context): InferenceModel =
+            INSTANCE ?: synchronized(this) {
+                INSTANCE ?: InferenceModel(context.applicationContext).also { INSTANCE = it }
+            }
     }
 
-    fun cancelAll() {
-        requests.keys().toList().forEach { cancelRequest(it) }
+    /* -----------------------
+       Streams
+       ----------------------- */
+
+    // SharedFlow for multiple subscribers; DROP_OLDEST prevents backpressure stalls.
+    private val _partialResults = MutableSharedFlow<PartialResult>(
+        replay = 0,
+        extraBufferCapacity = PARTIAL_BUFFER_CAPACITY,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    /** Public read-only stream of partial results. */
+    val partialResults: SharedFlow<PartialResult> = _partialResults.asSharedFlow()
+
+    /* -----------------------
+       State
+       ----------------------- */
+
+    @Volatile private var configuredModel: Model? = null
+    private val currentRequestId = AtomicReference<String?>(null)
+    private val finishing = AtomicBoolean(false)
+
+    /* -----------------------
+       Configuration
+       ----------------------- */
+
+    /**
+     * Set the model to be used. Typically called once at app startup.
+     *
+     * @param model Model definition containing path and sampling configuration.
+     */
+    fun setModel(model: Model) {
+        configuredModel = model
     }
 
-    fun close() {
-        if (!closed.compareAndSet(false, true)) {
-            Log.i(TAG, "close() called but already closed"); return
-        }
-        Log.i(TAG, "close() called")
+    /* -----------------------
+       Initialization
+       ----------------------- */
 
-        // 現在のリクエストはソフトキャンセル
-        cancelAll()
+    /**
+     * Initialize the model and suspend until it is ready.
+     *
+     * Call this during app startup; subsequent [startRequest] calls will not
+     * wait for initialization.
+     *
+     * @param expectedModelPath Optional sanity check; logs a warning if the actual path differs.
+     * @throws IllegalStateException If MediaPipe initialization fails (wrapped task error).
+     */
+    suspend fun ensureLoaded(expectedModelPath: String? = null) {
+        val model = configuredModel
+            ?: error("InferenceModel: model is not configured. Call setModel(model) first.")
 
-        // 少しだけ完了待ち（ソフトに）
-        val waitStart = System.currentTimeMillis()
-        while (requests.isNotEmpty() && System.currentTimeMillis() - waitStart < 2000L) {
-            try { Thread.sleep(25) } catch (_: InterruptedException) { Thread.currentThread().interrupt(); break }
-        }
-
-        emitScope.cancel()
-
-        // LLM を最後に閉じる
-        runCatching { llm?.close() }.onFailure { Log.w(TAG, "llm.close threw", it) }
-
-        runCatching { nativeCloseExecutor.shutdownNow() }
-        runCatching { listenerExecutor.shutdownNow() }
-        runCatching { emitRetryExecutor.shutdownNow() }
-
-        instance = null
-        llm = null
-        loaded.set(false)
-        loadedPath = null
-        Log.i(TAG, "InferenceModel closed")
-    }
-
-    /* ======================= Utils ======================= */
-
-    private val ALLOW_ASSETS_FALLBACK = false // 開発中のみ true 推奨
-
-    private fun ensureModelPresent(context: Context, fileOrName: String): String {
-        // 1) 絶対パス
-        val asFile = File(fileOrName)
-        if (asFile.isAbsolute) {
-            require(asFile.exists()) { "Model not found (absolute path): ${asFile.absolutePath}" }
-            return asFile.absolutePath
-        }
-        // 2) filesDir/<name>
-        val dst = File(context.filesDir, fileOrName)
-        if (dst.exists()) {
-            Log.i(TAG, "Model present at ${dst.absolutePath}")
-            return dst.absolutePath
-        }
-        // 3) assets フォールバック
-        if (ALLOW_ASSETS_FALLBACK) {
-            val assetPath = "models/$fileOrName"
-            return try {
-                Log.i(TAG, "Copying assets/$assetPath -> ${dst.absolutePath}")
-                context.assets.open(assetPath).use { input ->
-                    dst.parentFile?.mkdirs()
-                    FileOutputStream(dst).use { output -> input.copyTo(output) }
-                }
-                Log.i(TAG, "Model copied to ${dst.absolutePath}")
-                dst.absolutePath
-            } catch (e: Throwable) {
-                Log.e(TAG, "Copy from assets failed", e)
-                throw IllegalStateException(
-                    "Model not installed: ${dst.absolutePath}. Place the file in filesDir or pass an absolute path.",
-                    e
-                )
+        if (expectedModelPath != null) {
+            val actual = model.getPath()
+            if (actual != expectedModelPath) {
+                Log.w(TAG, "ensureLoaded: modelPath mismatch. expected=$expectedModelPath actual=$actual")
             }
         }
-        // 4) 明示的にエラー
-        throw IllegalStateException(
-            "Model not installed: ${dst.absolutePath}. " +
-                    "Download the model into filesDir or call ensureLoaded(<absolutePath>)."
-        )
+
+        if (model.instance != null) return // Already initialized.
+
+        // Bridge SLM.initialize (callback) into suspend.
+        return suspendCancellableCoroutine { cont ->
+            SLM.initialize(appContext, model) { err ->
+                if (err.isEmpty()) cont.resume(Unit)
+                else cont.resumeWithException(IllegalStateException(err))
+            }
+        }
     }
 
-    fun logMetrics() {
-        Log.i(
-            TAG,
-            "metrics: totalPartialCount=$totalPartialCount emitFailCount=$emitFailCount " +
-                    "droppedEmitsCount=$droppedEmitsCount pendingEmits=${pendingEmits.size} activeRequests=${requests.size}"
+    /* -----------------------
+       Inference (streaming)
+       ----------------------- */
+
+    /**
+     * Start a streaming inference and return a new request ID.
+     *
+     * Assumes [ensureLoaded] has already completed. If the model is not initialized,
+     * a terminal error is emitted to the stream immediately and the new requestId is returned.
+     *
+     * Note: SLM is currently text-only. The [images] parameter is reserved for future use.
+     *
+     * @param prompt Input text. Empty is allowed (validated by upper layers).
+     * @param images Reserved for future multimodal support (currently unused).
+     * @return The issued requestId.
+     */
+    fun startRequest(
+        prompt: String,
+        images: List<Bitmap> = emptyList()
+    ): String {
+        val model = configuredModel
+            ?: error("InferenceModel: model is not configured. Call setModel(model) first.")
+
+        val reqId = UUID.randomUUID().toString()
+
+        // Non-blocking behavior: if not initialized, emit terminal error and return.
+        if (model.instance == null) {
+            emitPartial(reqId, NOT_INITIALIZED_MSG, done = true)
+            return reqId
+        }
+
+        // Keep current requestId for cancel matching.
+        currentRequestId.set(reqId)
+        finishing.set(false)
+
+        if (!SLM.isBusy(model)) {
+            SLM.resetSession(model)
+        }
+
+        // Start streaming; SLM enforces single concurrency per model internally.
+        SLM.runInference(
+            model = model,
+            input = prompt,
+            resultListener = { partial, done ->
+                // Suppress empty noise but always forward the terminal event.
+                if (partial.isNotEmpty()) {
+                    emitPartial(reqId, partial, done)
+                } else if (done) {
+                    emitPartial(reqId, "", true)
+                }
+
+                if (done) {
+                    // Mark finished and clear active requestId.
+                    finishing.set(true)
+                    currentRequestId.compareAndSet(reqId, null)
+                }
+            },
+            cleanUpListener = {
+                // Hook for deferred cleanup notifications; UI updates can be triggered here if needed.
+            }
         )
+
+        return reqId
+    }
+
+    /**
+     * Cancel an in-flight generation for the given [requestId].
+     *
+     * Only cancels when the ID matches the active request. Completed or mismatched
+     * IDs are ignored to avoid interfering with serialization guarantees.
+     *
+     * @param requestId The ID to cancel.
+     */
+    fun cancelRequest(requestId: String) {
+        val model = configuredModel ?: return
+        val active = currentRequestId.get()
+
+        // Ignore if already finished or no active request.
+        if (finishing.get() || active == null) return
+
+        if (active != requestId) {
+            // Different ID: do nothing (Repository-side serialization is assumed).
+            Log.w(TAG, "cancelRequest: ignored (active=$active, requested=$requestId)")
+            return
+        }
+
+        SLM.cancel(model)
+    }
+
+    /**
+     * Explicitly release resources (e.g., at app shutdown).
+     *
+     * If a stream is running, cleanup is deferred and performed after completion.
+     * This method triggers asynchronous destruction and does not wait.
+     */
+    fun close() {
+        val model = configuredModel ?: return
+        SLM.cleanUp(model) { /* no-op */ }
+        currentRequestId.set(null)
+        finishing.set(false)
+    }
+
+    /**
+     * Whether the underlying SLM is currently busy (RUNNING or CANCELLING).
+     *
+     * Useful for tests and diagnostics.
+     *
+     * @return True if SLM reports a non-IDLE state; false otherwise or when not configured.
+     */
+    fun isBusy(): Boolean {
+        val model = configuredModel ?: return false
+        return SLM.isBusy(model)
+    }
+
+    /* -----------------------
+       Private helpers
+       ----------------------- */
+
+    /** Centralize emission to the SharedFlow (non-blocking; drops oldest on overflow). */
+    private fun emitPartial(requestId: String, text: String, done: Boolean) {
+        _partialResults.tryEmit(PartialResult(requestId, text, done))
+        // Explanation: tryEmit is non-suspending; overflow behavior follows the flow's policy.
     }
 }
