@@ -1,0 +1,37 @@
+{
+  "answers": {
+    "Q1": {
+      "question": "What crops are you interested in planting?",
+      "answer": "and heaven"
+    },
+    "Q2": {
+      "question": "In most seasons, how many days does your current maize variety take from planting to harvest?",
+      "answer": "wasn't"
+    },
+    "Q3": {
+      "question": "Do you use the Gregorian calendar?",
+      "answer": "egg the j"
+    },
+    "Q4": {
+      "question": "What maximum yield loss would you accept to harvest earlier—percentage or bags per acre?",
+      "answer": "an never the"
+    },
+    "Q5": {
+      "question": "How does crop maturity relate to market demand phrasing fewer crops vs more crops?",
+      "answer": "fggand and j"
+    }
+  },
+  "followups": {
+    "Q1": [
+      { "question": "What is the typical maturity range for maize in your region?", "answer": "canfhhr" },
+      { "question": "What is the average planting date in your region?", "answer": "and heaven" },
+      { "question": "What crops are you interested in planting?", "answer": "" }
+    ],
+    "Q3": [
+      { "question": "Do you use the Gregorian calendar?", "answer": "" }
+    ],
+    "Q5": [
+      { "question": "How does crop maturity relate to market demand phrasing fewer crops vs more crops?", "answer": "" }
+    ]
+  }
+}
