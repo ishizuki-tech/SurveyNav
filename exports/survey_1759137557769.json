@@ -1,0 +1,40 @@
+{
+  "answers": {
+    "Q1": {
+      "question": "What is the primary use of maize in your region (corn on the cob, animal feed, cornmeal)?",
+      "answer": "screen travel decent"
+    },
+    "Q2": {
+      "question": "How are days measured (germination to harvest)?",
+      "answer": "sch of think for the"
+    },
+    "Q3": {
+      "question": "During the short rains in your area, by which calendar month would you need to harvest to consider it early?",
+      "answer": "and the he's that he's she's can event the the fly"
+    },
+    "Q4": {
+      "question": "What crop are we discussing least optimally?",
+      "answer": "and is the the is thank it the"
+    },
+    "Q5": {
+      "question": "How does market timing influence the importance of yield maturity vs planting flexibility?",
+      "answer": "second"
+    }
+  },
+  "followups": {
+    "Q1": [
+      { "question": "What is the typical maturity range for maize in your region?", "answer": "scandal" },
+      { "question": "What specific maize varieties are commonly grown in your region?", "answer": "screen travel decent" },
+      { "question": "What is the primary use of maize in your region (corn on the cob, animal feed, cornmeal)?", "answer": "" }
+    ],
+    "Q2": [
+      { "question": "How are days measured (germination to harvest)?", "answer": "" }
+    ],
+    "Q4": [
+      { "question": "What crop are we discussing least optimally?", "answer": "" }
+    ],
+    "Q5": [
+      { "question": "How does market timing influence the importance of yield maturity vs planting flexibility?", "answer": "" }
+    ]
+  }
+}
