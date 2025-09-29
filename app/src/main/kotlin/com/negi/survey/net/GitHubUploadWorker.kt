@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
@@ -18,77 +19,98 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.negi.survey.R
 import java.io.File
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
+import kotlin.math.max
 
 /**
- * Uploads one JSON file in /files/pending_uploads to GitHub (Contents API).
- * - Foreground notification with progress (Android 14/15 requires FGS type)
- * - Runs only when online, survives reboot
- * - Deletes local pending file on success
- * - Outputs: fileName / remotePath / commitSha / fileUrl
+ * Uploads a single JSON file from /files/pending_uploads to GitHub (Contents API).
+ *
+ * Key behaviors:
+ * - Runs in foreground with a progress notification (Android 14/15 requires a foreground service type).
+ * - Enforced to run only when network is connected; survives process death.
+ * - Deletes the local pending file on success.
+ * - Exposes progress via setProgressAsync() and result via output Data.
+ *
+ * Output keys: fileName / remotePath / commitSha / fileUrl
  */
-class GitHubUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
+class GitHubUploadWorker(
+    appContext: Context,
+    params: WorkerParameters
+) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
+        // --- Read & validate inputs (fail fast with clear semantics) ---
         val cfg = GitHubConfig(
             owner = inputData.getString(KEY_OWNER).orEmpty(),
-            repo = inputData.getString(KEY_REPO).orEmpty(),
+            repo  = inputData.getString(KEY_REPO).orEmpty(),
             token = inputData.getString(KEY_TOKEN).orEmpty(),
             branch = inputData.getString(KEY_BRANCH).orEmpty(),
             pathPrefix = inputData.getString(KEY_PATH_PREFIX).orEmpty()
         )
         val filePath = inputData.getString(KEY_FILE_PATH).orEmpty()
         val fileName = inputData.getString(KEY_FILE_NAME) ?: File(filePath).name
-        if (
-            cfg.token.isBlank() ||
-            cfg.owner.isBlank() ||
-            cfg.repo.isBlank() ||
-            filePath.isBlank() ||
-            fileName.isBlank()
-        ) {
-            return Result.failure()
+
+        if (cfg.owner.isBlank() || cfg.repo.isBlank() || cfg.token.isBlank()) {
+            // Misconfiguration → no point retrying
+            return Result.failure(workDataOf(ERROR_MESSAGE to "Invalid GitHub config (owner/repo/token)"))
+        }
+        if (filePath.isBlank()) {
+            return Result.failure(workDataOf(ERROR_MESSAGE to "Input file path is blank"))
+        }
+        if (fileName.isBlank()) {
+            return Result.failure(workDataOf(ERROR_MESSAGE to "File name is blank"))
         }
 
         val pendingFile = File(filePath)
-        if (!pendingFile.exists()) return Result.failure()
+        if (!pendingFile.exists()) {
+            // File already processed or missing → treat as failure but do not retry
+            return Result.failure(workDataOf(ERROR_MESSAGE to "Pending file not found: $filePath"))
+        }
 
+        // Build the remote path under the configured prefix
         val remotePath = buildRemotePath(cfg.pathPrefix, fileName)
 
+        // Ensure the notification channel exists before entering foreground
         ensureChannel()
 
-        // Unique notification id per file so parallel uploads don't fight
+        // Use a stable, per-file notification id so parallel uploads do not collide
         val notifId = NOTIF_BASE + (abs(fileName.hashCode()) % 8000)
-        setForegroundAsync(foregroundInfo(notifId, 0, "Uploading $fileName"))
 
-        val json = pendingFile.readText()
+        // Enter foreground early to satisfy Android 14+ restrictions
+        setForegroundAsync(foregroundInfo(notifId, pct = 0, title = "Uploading $fileName"))
+
+        // Read the file as UTF-8; for large payloads consider streaming if needed
+        val jsonContent = runCatching { pendingFile.readText(Charsets.UTF_8) }
+            .getOrElse { e ->
+                return Result.failure(workDataOf(ERROR_MESSAGE to "Read failed: ${e.message}"))
+            }
 
         var lastPct = 0
+
         return try {
+            // Perform the upload while reporting progress to both WorkManager and Notification
             val result = GitHubUploader.uploadJson(
                 owner = cfg.owner,
                 repo = cfg.repo,
                 branch = cfg.branch,
                 path = remotePath,
                 token = cfg.token,
-                content = json
+                content = jsonContent
             ) { pctLong, _ ->
                 lastPct = pctLong.toInt().coerceIn(0, 100)
-                setProgressAsync(
-                    workDataOf(
-                        PROGRESS_PCT to lastPct,
-                        PROGRESS_FILE to fileName
-                    )
-                )
-                setForegroundAsync(foregroundInfo(notifId, lastPct, "Uploading $fileName"))
+                setProgressAsync(workDataOf(PROGRESS_PCT to lastPct, PROGRESS_FILE to fileName))
+                setForegroundAsync(foregroundInfo(notifId, pct = lastPct, title = "Uploading $fileName"))
             }
 
-            // Mark 100% and finish nicely
+            // Finalize UI as complete
             setProgressAsync(workDataOf(PROGRESS_PCT to 100, PROGRESS_FILE to fileName))
-            setForegroundAsync(foregroundInfo(notifId, 100, "Uploaded $fileName", finished = true))
+            setForegroundAsync(foregroundInfo(notifId, pct = 100, title = "Uploaded $fileName", finished = true))
 
-            // Delete local pending file
+            // Best-effort cleanup of the local file
             runCatching { pendingFile.delete() }
 
+            // Provide structured outputs to callers
             val out = workDataOf(
                 OUT_FILE_NAME to fileName,
                 OUT_REMOTE_PATH to remotePath,
@@ -98,19 +120,32 @@ class GitHubUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWork
             Result.success(out)
 
         } catch (t: Throwable) {
-            // Keep file for retry; just update notification
-            setForegroundAsync(foregroundInfo(notifId, lastPct, "Upload failed: $fileName", error = true))
-            val failureData = workDataOf("error" to (t.message ?: "unknown"))
+            // Keep the file for retries; reflect the last observed progress in the notification
+            setForegroundAsync(
+                foregroundInfo(
+                    notificationId = notifId,
+                    pct = max(0, lastPct),
+                    title = "Upload failed: $fileName",
+                    error = true
+                )
+            )
+            val failureData = workDataOf(ERROR_MESSAGE to (t.message ?: "unknown"))
+            // Delegate retry policy to WorkManager's backoff criteria; request retry if budget remains
             if (runAttemptCount < MAX_ATTEMPTS) Result.retry() else Result.failure(failureData)
         }
     }
 
-    private fun buildRemotePath(prefix: String, fileName: String): String {
-        val segments = listOf(prefix.trim('/'), fileName.trim('/'))
+    /** Builds "prefix/fileName" while avoiding duplicate slashes. */
+    private fun buildRemotePath(prefix: String, fileName: String): String =
+        listOf(prefix.trim('/'), fileName.trim('/'))
             .filter { it.isNotEmpty() }
-        return segments.joinToString(separator = "/")
-    }
+            .joinToString("/")
 
+    /**
+     * Creates a ForegroundInfo with a progress notification.
+     * - Ongoing while in progress; auto-stops on success/failure.
+     * - Android 14/15: declares DATA_SYNC foreground service type.
+     */
     private fun foregroundInfo(
         notificationId: Int,
         pct: Int,
@@ -118,18 +153,24 @@ class GitHubUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWork
         finished: Boolean = false,
         error: Boolean = false
     ): ForegroundInfo {
-        val notif = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_upload)
             .setContentTitle(title)
             .setOnlyAlertOnce(true)
             .setOngoing(!finished && !error)
-            .apply {
-                if (finished || error) setProgress(0, 0, false)
-                else setProgress(100, pct.coerceIn(0, 100), pct < 0)
-            }
-            .build()
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
 
-        // ★ Android 14/15 対策：FGS の種別を dataSync に明示
+        // Determinate progress when 0..100; indeterminate only when pct < 0 (not used here)
+        if (finished || error) {
+            builder.setProgress(0, 0, false)
+        } else {
+            builder.setProgress(100, pct.coerceIn(0, 100), false)
+        }
+
+        val notif = builder.build()
+
+        // Declare the foreground service type for Android 14+ compliance
         return ForegroundInfo(
             notificationId,
             notif,
@@ -137,16 +178,19 @@ class GitHubUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWork
         )
     }
 
+    /** Ensures the notification channel exists on Android O+. Id must match the builder. */
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    "Background Uploads",
-                    NotificationManager.IMPORTANCE_LOW
-                ).apply { description = "GitHub upload progress" }
-            )
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Background Uploads",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "GitHub upload progress"
+                setShowBadge(false)
+            }
+            nm.createNotificationChannel(channel)
         }
     }
 
@@ -159,7 +203,7 @@ class GitHubUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWork
 
         // progress keys
         const val PROGRESS_PCT = "pct"      // Int 0..100
-        const val PROGRESS_FILE = "file"    // String filename
+        const val PROGRESS_FILE = "file"    // String: filename
 
         // input keys
         const val KEY_OWNER = "owner"
@@ -176,6 +220,15 @@ class GitHubUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWork
         const val OUT_COMMIT_SHA = "out.commitSha"
         const val OUT_FILE_URL = "out.fileUrl"
 
+        // failure key
+        const val ERROR_MESSAGE = "error"
+
+        /**
+         * Enqueue a work to upload an already existing file on disk.
+         * - Unique per filename to avoid duplicate uploads.
+         * - Requires network; uses expedited if quota permits, otherwise falls back.
+         * - Applies exponential backoff for robust retries.
+         */
         fun enqueueExistingPayload(context: Context, cfg: GitHubConfig, file: File) {
             val fileName = file.name
             val req = OneTimeWorkRequestBuilder<GitHubUploadWorker>()
@@ -195,6 +248,11 @@ class GitHubUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWork
                         .setRequiredNetworkType(NetworkType.CONNECTED)
                         .build()
                 )
+                .setBackoffCriteria(
+                    BackoffPolicy.EXPONENTIAL,
+                    30, // initial delay (seconds)
+                    TimeUnit.SECONDS
+                )
                 .addTag(TAG)
                 .addTag("$TAG:file:$fileName")
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
@@ -204,6 +262,10 @@ class GitHubUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWork
                 .enqueueUniqueWork("upload_$fileName", ExistingWorkPolicy.KEEP, req)
         }
 
+        /**
+         * Enqueue a work by writing the JSON content into /files/pending_uploads first.
+         * Filenames are sanitized and uniquified to avoid clobbering existing payloads.
+         */
         fun enqueue(
             context: Context,
             cfg: GitHubConfig,
@@ -220,17 +282,19 @@ class GitHubUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWork
             enqueueExistingPayload(context, cfg, target)
         }
 
+        /** Replace non [A-Za-z0-9_.-] characters with underscores to make a filesystem-safe filename. */
         private fun sanitizeName(name: String): String =
             name.replace(Regex("""[^\w\-.]"""), "_")
 
+        /** If the target exists, append _1, _2, ... until a free name is found. */
         private fun uniqueIfExists(file: File): File {
             if (!file.exists()) return file
             val base = file.nameWithoutExtension
             val ext = file.extension.let { if (it.isNotEmpty()) ".$it" else "" }
             var idx = 1
             while (true) {
-                val cand = File(file.parentFile, "${base}_$idx$ext")
-                if (!cand.exists()) return cand
+                val candidate = File(file.parentFile, "${base}_$idx$ext")
+                if (!candidate.exists()) return candidate
                 idx++
             }
         }

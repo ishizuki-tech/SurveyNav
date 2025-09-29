@@ -7,7 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import com.negi.survey.ModelAssetRule
 import com.negi.survey.slm.InferenceModel
-import com.negi.survey.slm.MediaPipeRepository
+import com.negi.survey.slm.SlmDirectRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.filter
@@ -39,7 +39,7 @@ class AiViewModelGraphConfigFromAssetsInstrumentationTest {
     @get:Rule val modelRule = ModelAssetRule()
 
     private lateinit var appCtx: Context
-    private lateinit var repo: MediaPipeRepository
+    private lateinit var repo: SlmDirectRepository
     private lateinit var vm: AiViewModel
     private lateinit var cfg: RootConfig
 
@@ -50,7 +50,7 @@ class AiViewModelGraphConfigFromAssetsInstrumentationTest {
         // Ensure MediaPipe-backed model is loaded once (path prepared by ModelAssetRule).
         InferenceModel.getInstance(appCtx).ensureLoaded(modelRule.internalModel.absolutePath)
 
-        if (!::repo.isInitialized) repo = MediaPipeRepository(appCtx)
+        if (!::repo.isInitialized) repo = SlmDirectRepository(appCtx)
         if (!::vm.isInitialized) vm = AiViewModel(repo, timeout_ms = 120_000)
         else vm.resetStates(keepError = false)
 

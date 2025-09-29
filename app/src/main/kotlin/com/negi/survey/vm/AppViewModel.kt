@@ -1,16 +1,8 @@
 package com.negi.survey.vm
 
 import android.content.Context
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -31,6 +23,9 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+/**
+ * Represents the current download state for the model.
+ */
 sealed class DlState {
     data object Idle : DlState()
     data class Downloading(val downloaded: Long, val total: Long?) : DlState()
@@ -38,11 +33,17 @@ sealed class DlState {
     data class Error(val message: String) : DlState()
 }
 
+/**
+ * ViewModel responsible for managing the download and persistence of the SLM model file.
+ */
 class AppViewModel(
     private val modelUrl: String = DEFAULT_MODEL_URL,
     private val client: OkHttpClient = defaultClient(BuildConfig.HF_TOKEN.takeIf { it.isNotBlank() })
 ) : ViewModel() {
 
+    /**
+     * Interceptor that adds headers (User-Agent, Authorization, etc.) to requests.
+     */
     class HfAuthInterceptor(private val token: String) : Interceptor {
         override fun intercept(chain: Interceptor.Chain): Response {
             val req = chain.request()
@@ -60,14 +61,17 @@ class AppViewModel(
     private val _state = MutableStateFlow<DlState>(DlState.Idle)
     val state: StateFlow<DlState> = _state
 
+    /**
+     * Ensures that the model is downloaded once. If already downloading or done, skips execution.
+     */
     fun ensureModelDownloaded(appContext: Context) {
-
         if (_state.value is DlState.Downloading || _state.value is DlState.Done) return
 
         viewModelScope.launch {
-
             val fileName = modelUrl.substringAfterLast('/').ifBlank { "model.litertlm" }
             val dstFile = File(appContext.filesDir, fileName)
+
+            // Skip download if the file already exists
             if (dstFile.exists() && dstFile.length() > 0) {
                 _state.value = DlState.Done(dstFile)
                 return@launch
@@ -86,6 +90,9 @@ class AppViewModel(
         }
     }
 
+    /**
+     * Downloads a file to disk with optional progress tracking.
+     */
     private suspend fun downloadToFile(
         url: String,
         dst: File,
@@ -93,16 +100,18 @@ class AppViewModel(
     ) = withContext(Dispatchers.IO) {
         dst.parentFile?.mkdirs()
         val req = Request.Builder().url(url).build()
+
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
                 val code = resp.code
                 val msg = resp.body?.string()?.take(200)
                 throw IOException("HTTP $code ${msg ?: ""}".trim())
             }
+
             val body = resp.body ?: throw IOException("empty body")
             val total = body.contentLength().takeIf { it >= 0 }
+
             body.byteStream().use { input ->
-                // 一時ファイルに落としてからrename（不完全ファイル対策）
                 val tmp = File(dst.parentFile, dst.name + ".part")
                 tmp.outputStream().use { output ->
                     val buf = ByteArray(256 * 1024)
@@ -124,6 +133,9 @@ class AppViewModel(
 
     companion object {
 
+        /**
+         * ViewModel factory to be used with Compose viewModel() helper.
+         */
         fun factory() = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -134,6 +146,9 @@ class AppViewModel(
         const val DEFAULT_MODEL_URL =
             "https://huggingface.co/google/gemma-3n-E4B-it-litert-lm/resolve/main/gemma-3n-E4B-it-int4.litertlm"
 
+        /**
+         * Provides a default OkHttpClient with proper headers and timeouts.
+         */
         fun defaultClient(hfToken: String?): OkHttpClient =
             OkHttpClient.Builder()
                 .addInterceptor(HfAuthInterceptor(hfToken.orEmpty()))
@@ -147,6 +162,10 @@ class AppViewModel(
     }
 }
 
+/**
+ * UI component that gates access to the main content until model download completes.
+ * Shows progress UI or error with retry. Delegates to [content] on success.
+ */
 @Composable
 fun DownloadGate(
     state: DlState,
@@ -154,20 +173,15 @@ fun DownloadGate(
     content: @Composable (modelFile: File) -> Unit
 ) {
     when (state) {
-
         is DlState.Idle, is DlState.Downloading -> {
-
             val (got, total) = when (state) {
                 is DlState.Downloading -> state.downloaded to state.total
                 else -> 0L to null
             }
-
             val pct: Int? = total?.let { if (it > 0) ((got * 100.0 / it).toInt()) else null }
 
             Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
+                Modifier.fillMaxSize().padding(24.dp),
                 verticalArrangement = Arrangement.Center
             ) {
                 Text("Downloading the target SLM…")
@@ -189,9 +203,7 @@ fun DownloadGate(
 
         is DlState.Error -> {
             Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
+                Modifier.fillMaxSize().padding(24.dp),
                 verticalArrangement = Arrangement.Center
             ) {
                 Text("Failed Download... : ${state.message}")

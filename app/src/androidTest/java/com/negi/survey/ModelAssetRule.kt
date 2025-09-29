@@ -1,3 +1,5 @@
+@file:Suppress("UnusedParameter")
+
 package com.negi.survey
 
 import android.Manifest
@@ -24,24 +26,42 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * Instrumentation用の共通Rule。
- * - MediaStore経由でモデルを確保し、内部(filesDir/models)へ配置する。
- * - ロジックは元実装と等価（探索順序・権限採用・フォールバック・ダウンロード・コピー手順）。
+ * Instrumentation test Rule that guarantees a model artifact is available under:
+ *   <app internal>/files/models/<modelName>
+ *
+ * Strategy (API-aware, order-preserving):
+ *  1) If already copied to internal storage -> done.
+ *  2) Try resolving via a cached MediaStore Uri (if any).
+ *  3) API 33+: query self-owned → else temporarily adopt "all-files" read and query any-owner.
+ *  4) API <= 32: legacy LIKE query (kick MediaScanner as a fallback).
+ *  5) If not found, create a self-owned MediaStore Download entry and download the model to it.
+ *  6) Finally copy from the resolved Uri to internal storage (filesDir/models).
+ *
+ * Permissions / identities:
+ *  - On API <= 32 adopts READ_EXTERNAL_STORAGE via shell identity for read queries.
+ *  - On API 33+ uses OWNER_PACKAGE_NAME-aware queries; may temporarily adopt MANAGE_EXTERNAL_STORAGE
+ *    (if available to the test run) for "any-owner" query path.
+ *
+ * All operations intentionally mirror the original logic to remain behaviorally equivalent.
  */
 class ModelAssetRule(
-    private val modelName: String = "gemma-3n-E4B-it-int4.litertlm",
-    private val relativeDir: String = Environment.DIRECTORY_DOWNLOADS + "/SurveyNavModels",
-    private val modelUrl: String = "https://huggingface.co/google/gemma-3n-E4B-it-litert-lm/resolve/main/gemma-3n-E4B-it-int4.litertlm",
+    private val modelName: String = DEFAULT_MODEL_NAME,
+    private val relativeDir: String = DEFAULT_REL_DIR,
+    private val modelUrl: String = DEFAULT_MODEL_URL,
     private val bearerToken: String? = BuildConfig.HF_TOKEN.takeIf { it.isNotBlank() },
 ) : ExternalResource() {
 
+    // Public after setup so tests can use the resolved file directly.
     lateinit var context: Context; private set
     lateinit var internalModel: File; private set
 
     private val TAG = "MS-ModelPrep"
+
+    // SharedPreferences (persisting last resolved MediaStore Uri)
     private val prefsName = "ms_cache"
     private val keyModelUri = "model_uri"
 
+    // HTTP client for large downloads (long read timeout)
     private val http by lazy {
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -52,39 +72,54 @@ class ModelAssetRule(
             .build()
     }
 
+    // Identity / permission adoption bookkeeping
     private var adoptedShellRead = false
     private var adoptedForApi: Int = -1
+
+    // I/O parameters
+    private companion object {
+        const val BUFFER_SIZE = 256 * 1024
+        const val PREF_DIR_NAME = "models" // internal subdir
+        const val DEFAULT_MODEL_NAME = "gemma-3n-E4B-it-int4.litertlm"
+        const val DEFAULT_MODEL_URL = "https://huggingface.co/google/gemma-3n-E4B-it-litert-lm/resolve/main/gemma-3n-E4B-it-int4.litertlm"
+        val DEFAULT_REL_DIR = "${Environment.DIRECTORY_DOWNLOADS}/SurveyNavModels"
+    }
 
     // ---------------- lifecycle ----------------
 
     override fun before() {
         context = InstrumentationRegistry.getInstrumentation().targetContext
+
+        // Guard: This logic relies on scoped storage / RELATIVE_PATH
         Assume.assumeTrue("Requires API 29+ (Android 10+).", Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
 
         adoptReadExternalIfNeeded()
 
-        // 1) 内部に既存なら終了
-        internalModel = File(File(context.filesDir, "models"), modelName).apply { parentFile?.mkdirs() }
+        // 1) Already copied to internal? (fast path)
+        internalModel = File(File(context.filesDir, PREF_DIR_NAME), modelName).apply { parentFile?.mkdirs() }
         if (internalModel.exists() && internalModel.length() > 0) {
             Log.i(TAG, "Skip: internal exists -> ${internalModel.absolutePath}")
             return
         }
 
-        // 2) 既存探索（キャッシュ → 自アプリ所有(API33+) → どの所有者でも(API33+) → レガシー(API<=32)）
+        // 2) Resolve source Uri: cache → self-owned (API 33+) → any-owner (API 33+) → legacy (<=32)
         val cached = loadCachedUri()?.takeIf { getSize(it) > 0 }
 
-        // API33+ 自アプリ所有
+        // API 33+: try self-owned first
         val selfOwned = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             cached ?: querySelfOwnedByNamePreferPathLike(modelName, relativeDir)?.also { cacheUri(it) }
         } else null
 
         if (selfOwned != null) {
-            // 後段でコピー
+            // proceed to copy later
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // API33+ 任意所有者（必要時のみ一時的にAll files相当の読み権限）
+            // API 33+: temporarily adopt broader read to query any-owner items
             val copied = withAllFilesAccessForRead {
                 queryAnyOwnerByNamePreferPathLikeApi33(modelName, relativeDir)?.let { uri ->
-                    if (getSize(uri) > 0) { copyUriToFile(uri, internalModel); true } else false
+                    if (getSize(uri) > 0) {
+                        copyUriToFile(uri, internalModel)
+                        true
+                    } else false
                 } ?: false
             }
             if (copied) {
@@ -93,14 +128,14 @@ class ModelAssetRule(
             }
         }
 
-        // API<=32 レガシー探索
+        // API <= 32: legacy LIKE query (optionally poke MediaScanner first)
         val legacyFound = if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
             runCatching { kickMediaScanner(relativeDir, modelName) }
             cached ?: queryByNamePreferPathLikeLegacy(modelName, relativeDir)?.also { cacheUri(it) }
         } else null
 
-        // 3) 無ければ新規作成→DL（アプリIDで所有）→検証→キャッシュ
-        val target = selfOwned ?: legacyFound ?: run {
+        // 3) If still not found, create a self-owned entry and download the model to it
+        val source = selfOwned ?: legacyFound ?: run {
             val created = insertDownloadOwned(modelName, relativeDir)
             try {
                 downloadToUriOwned(created, modelUrl, bearerToken)
@@ -114,13 +149,14 @@ class ModelAssetRule(
             created
         }
 
-        // 4) 内部へコピー
-        copyUriToFile(target, internalModel)
+        // 4) Copy to app-internal storage for deterministic access by tests/app
+        copyUriToFile(source, internalModel)
         Log.i(TAG, "internal=${internalModel.absolutePath} len=${internalModel.length()}")
         check(internalModel.exists() && internalModel.length() > 0)
     }
 
     override fun after() {
+        // Drop adopted shell identity if held
         if (adoptedShellRead) {
             runCatching { InstrumentationRegistry.getInstrumentation().uiAutomation.dropShellPermissionIdentity() }
             adoptedShellRead = false
@@ -129,11 +165,16 @@ class ModelAssetRule(
 
     // ---------------- adopt / identity ----------------
 
+    /**
+     * Adopt a read capability according to API level:
+     * - API 33+: no adoption needed for self-owned; we keep a record to skip adoption.
+     * - API <= 32: adopt READ_EXTERNAL_STORAGE via shell identity for legacy queries.
+     */
     private fun adoptReadExternalIfNeeded() {
         val ui = InstrumentationRegistry.getInstrumentation().uiAutomation
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             adoptedForApi = 33
-            Log.i(TAG, "skip adopt for API>=33 (self-owned search)")
+            Log.i(TAG, "skip adopt for API>=33 (self-owned search path available)")
         } else {
             ui.adoptShellPermissionIdentity(Manifest.permission.READ_EXTERNAL_STORAGE)
             adoptedShellRead = true
@@ -144,6 +185,13 @@ class ModelAssetRule(
         }
     }
 
+    /**
+     * Execute a block with temporarily adopted broader read access:
+     * - API 33+: try MANAGE_EXTERNAL_STORAGE (if test process is privileged)
+     * - API <= 32: adopt READ_EXTERNAL_STORAGE (legacy)
+     *
+     * Always restores the previous adoption state on exit.
+     */
     private inline fun <T> withAllFilesAccessForRead(block: () -> T): T {
         val ui = InstrumentationRegistry.getInstrumentation().uiAutomation
         var adopted = false
@@ -161,11 +209,17 @@ class ModelAssetRule(
             if (adopted) {
                 runCatching { ui.dropShellPermissionIdentity() }
                 Log.i(TAG, "drop temp all-files access")
+                // Restore the baseline adoption state post-op
                 adoptReadExternalIfNeeded()
+                Log.i(TAG, "re-adopt after write; api=$adoptedForApi")
             }
         }
     }
 
+    /**
+     * Temporarily drop adopted shell identity to act as the app for a write operation
+     * (MediaStore insert/update). Restores the previous state afterwards.
+     */
     private inline fun <T> withAppIdentity(block: () -> T): T {
         val ui = InstrumentationRegistry.getInstrumentation().uiAutomation
         val dropped = if (adoptedShellRead) runCatching { ui.dropShellPermissionIdentity() }
@@ -213,11 +267,12 @@ class ModelAssetRule(
         )
     }
 
-    /** API33+: 自アプリ所有（owner=null も許容） */
+    /** API 33+: query self-owned entries first (OWNER_PACKAGE_NAME in {self variants, null}). */
     private fun querySelfOwnedByNamePreferPathLike(displayName: String, preferRelPath: String): Uri? {
         val (likeName, preferSuffix) = likeNameAndSuffix(displayName, preferRelPath).first to
                 relLikes(preferRelPath).preferSuffix
         val owners = ownerCandidates()
+
         fun query(baseUri: Uri): List<Cand> {
             val projection = arrayOf(
                 MediaStore.MediaColumns._ID,
@@ -264,7 +319,7 @@ class ModelAssetRule(
         return pickBestByRelAndTime(cands, preferSuffix)
     }
 
-    /** API33+: 任意オーナー（まず相対パス重視、無ければ緩める） */
+    /** API 33+: query any-owner entries. First prefer RELATIVE_PATH, then relax if empty. */
     private fun queryAnyOwnerByNamePreferPathLikeApi33(displayName: String, preferRelPath: String): Uri? {
         val (likeName, preferSuffix) = likeNameAndSuffix(displayName, preferRelPath).first to
                 relLikes(preferRelPath).preferSuffix
@@ -295,13 +350,13 @@ class ModelAssetRule(
             return queryCandidates(baseUri, projection, sel.toString(), args.toTypedArray())
         }
 
-        var cands = acrossVolumes { query(it, true) }
-        if (cands.isEmpty()) cands = acrossVolumes { query(it, false) }
+        var cands = acrossVolumes { query(it, strictRel = true) }
+        if (cands.isEmpty()) cands = acrossVolumes { query(it, strictRel = false) }
         if (cands.isEmpty()) return null
         return pickBestByRelAndTime(cands, preferSuffix)
     }
 
-    /** API<=32: DISPLAY_NAME LIKE で探索（DATE_MODIFIED優先） */
+    /** API <= 32: fallback legacy search via DISPLAY_NAME LIKE; prefer RELATIVE_PATH if present. */
     private fun queryByNamePreferPathLikeLegacy(displayName: String, preferRelPath: String): Uri? {
         val (base, ext) = displayName.substringBeforeLast('.') to displayName.substringAfterLast('.', "")
         val likePattern = if (ext.isNotEmpty()) "${escapeLike(base)}%.$ext" else "${escapeLike(base)}%"
@@ -350,12 +405,13 @@ class ModelAssetRule(
         val cands = acrossVolumes(::query)
         if (cands.isEmpty()) return null
         val preferSuffix = normalizeRelPath(preferRelPath)
-        val exact = cands.filter { it.rel?.let { r -> normalizeRelPath(r).endsWith(preferSuffix) } == true }
+        val exact = cands
+            .filter { it.rel?.let { r -> normalizeRelPath(r).endsWith(preferSuffix) } == true }
             .maxWithOrNull(compareBy<CandL> { it.mod }.thenBy { it.size })
         return (exact ?: cands.maxWithOrNull(compareBy<CandL> { it.mod }.thenBy { it.size }))?.uri
     }
 
-    // 共通クエリ実行
+    // Shared candidate query executor
     private fun queryCandidates(
         baseUri: Uri,
         projection: Array<String>,
@@ -386,9 +442,11 @@ class ModelAssetRule(
         return out
     }
 
+    /** Prefer entries whose RELATIVE_PATH ends with the preferred suffix; fallback to freshest by DATE_MODIFIED, then size. */
     private fun pickBestByRelAndTime(cands: List<Cand>, preferSuffix: String): Uri? {
         if (cands.isEmpty()) return null
-        val exact = cands.filter { it.rel?.let { r -> normalizeRelPath(r).endsWith(preferSuffix) } == true }
+        val exact = cands
+            .filter { it.rel?.let { r -> normalizeRelPath(r).endsWith(preferSuffix) } == true }
             .maxWithOrNull(compareBy<Cand> { it.mod }.thenBy { it.size })
         return (exact ?: cands.maxWithOrNull(compareBy<Cand> { it.mod }.thenBy { it.size }))?.uri
     }
@@ -406,6 +464,7 @@ class ModelAssetRule(
 
     // ---------------- MediaStore write (owned by app) ----------------
 
+    /** Insert a pending Download entry that this app owns (RELATIVE_PATH under Downloads). */
     private fun insertDownloadOwned(displayName: String, relPath: String): Uri = withAppIdentity {
         val cv = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
@@ -418,6 +477,7 @@ class ModelAssetRule(
         ) ?: throw IOException("MediaStore insert failed")
     }
 
+    /** Download the model via OkHttp into the given (pending) Uri; publish by clearing IS_PENDING. */
     private fun downloadToUriOwned(dstUri: Uri, url: String, token: String?) = withAppIdentity {
         val req = Request.Builder().url(url).apply {
             if (!token.isNullOrBlank()) header("Authorization", "Bearer $token")
@@ -430,7 +490,7 @@ class ModelAssetRule(
             val body = resp.body ?: throw IOException("empty body")
             context.contentResolver.openOutputStream(dstUri, "w")?.use { out ->
                 body.byteStream().use { input ->
-                    val buf = ByteArray(256 * 1024)
+                    val buf = ByteArray(BUFFER_SIZE)
                     while (true) {
                         val n = input.read(buf)
                         if (n < 0) break
@@ -444,6 +504,7 @@ class ModelAssetRule(
         )
     }
 
+    /** Log owner info for diagnostics; warn when not owned by this package. */
     private fun verifyOwnerOrWarn(uri: Uri) {
         val owner = getOwner(uri)
         Log.i(TAG, "owner check: $owner expected=${context.packageName}")
@@ -469,6 +530,10 @@ class ModelAssetRule(
             .getString(keyModelUri, null)
             ?.let { runCatching { Uri.parse(it) }.getOrNull() }
 
+    /**
+     * Nudge MediaScanner to index a probable file location (legacy devices).
+     * Only meaningful on API 29+; safe no-op otherwise.
+     */
     private fun kickMediaScanner(relPath: String, displayName: String) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         val base = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
@@ -477,6 +542,7 @@ class ModelAssetRule(
         MediaScannerConnection.scanFile(context, arrayOf(abs), null, null)
     }
 
+    /** Escape LIKE special chars for SQL pattern (\, %, _). */
     private fun escapeLike(s: String): String =
         s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
@@ -485,11 +551,13 @@ class ModelAssetRule(
 
     private fun normalizeRelPath(path: String) = if (path.endsWith("/")) path else "$path/"
 
+    /** Best-effort delete; logs warnings but never throws. */
     private fun safeDelete(uri: Uri) {
         runCatching { context.contentResolver.delete(uri, null, null) }
             .onFailure { Log.w(TAG, "delete failed for $uri : ${it.message}") }
     }
 
+    /** Size helper that tolerates IS_PENDING and fallback to AssetFileDescriptor.length(). */
     private fun getSize(uri: Uri): Long {
         context.contentResolver.query(
             uri, arrayOf(MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.IS_PENDING), null, null, null
@@ -508,13 +576,14 @@ class ModelAssetRule(
         } catch (_: Throwable) { 0L }
     }
 
+    /** Copy from a content Uri to a private file using a temp ".part" for atomic swap. */
     private fun copyUriToFile(src: Uri, dst: File) {
         dst.parentFile?.mkdirs()
         val tmp = File(dst.parentFile, dst.name + ".part")
         try {
             context.contentResolver.openInputStream(src)?.use { input ->
                 FileOutputStream(tmp).use { out ->
-                    val buf = ByteArray(256 * 1024)
+                    val buf = ByteArray(BUFFER_SIZE)
                     while (true) {
                         val n = input.read(buf)
                         if (n < 0) break

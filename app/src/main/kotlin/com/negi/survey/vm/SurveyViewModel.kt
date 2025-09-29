@@ -6,27 +6,24 @@ import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
 import com.negi.survey.config.NodeDTO
 import com.negi.survey.config.SurveyConfig
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.*
 import kotlinx.serialization.Serializable
 
 private const val TAG = "SurveyVM"
 
-/* ============================================================
- * BackStackPort（Nav依存を切り離す最小ポート）
- * ============================================================ */
+/**
+ * Interface that abstracts minimal navigation stack operations.
+ * Enables testability and decouples from navigation library.
+ */
 interface BackStackPort<K : NavKey> {
     fun add(key: K): Boolean
     fun removeLastOrNull(): K?
     fun clear()
 }
 
-/** 実運用用: NavBackStack -> BackStackPort アダプタ */
+/**
+ * Adapter to bridge Navigation3's NavBackStack with BackStackPort.
+ */
 class Nav3BackStackAdapter(
     private val delegate: NavBackStack<NavKey>
 ) : BackStackPort<NavKey> {
@@ -35,11 +32,14 @@ class Nav3BackStackAdapter(
     override fun clear() = delegate.clear()
 }
 
-/* ============================================================
- * Graph primitives
- * ============================================================ */
+/**
+ * Survey node types for flow branching.
+ */
 enum class NodeType { START, TEXT, SINGLE_CHOICE, MULTI_CHOICE, AI, REVIEW, DONE }
 
+/**
+ * Runtime node model built from config.
+ */
 data class Node(
     val id: String,
     val type: NodeType,
@@ -49,7 +49,9 @@ data class Node(
     val nextId: String? = null
 )
 
-/* Nav keys for nav3（UI層で FlowXXX を使いたい場合に備え残しておく） */
+/**
+ * NavKey definitions for each flow node (navigation destinations).
+ */
 @Serializable object FlowHome   : NavKey
 @Serializable object FlowText   : NavKey
 @Serializable object FlowSingle : NavKey
@@ -58,24 +60,27 @@ data class Node(
 @Serializable object FlowReview : NavKey
 @Serializable object FlowDone   : NavKey
 
+/**
+ * Events for showing UI feedback (e.g., snackbars or dialogs).
+ */
 sealed interface UiEvent {
     data class Snack(val message: String) : UiEvent
     data class Dialog(val title: String, val message: String) : UiEvent
 }
 
-/* ============================================================
- * ViewModel（BackStackPort に依存）
- * ============================================================ */
-@Suppress("MemberVisibilityCanBePrivate")
+/**
+ * Main ViewModel for managing survey state, answers, navigation, and follow-ups.
+ */
 class SurveyViewModel(
     val nav: NavBackStack<NavKey>,
     private val config: SurveyConfig,
 ) : ViewModel() {
 
-    /* ---------- Graph from JSON ---------- */
+    // Graph configuration loaded from JSON
     private val graph: Map<String, Node>
     private val startId: String = config.graph.startId
 
+    // Converts DTO to internal node model
     private fun NodeDTO.toNode(): Node = Node(
         id = id,
         type = runCatching { NodeType.valueOf(type.uppercase()) }.getOrElse { NodeType.TEXT },
@@ -85,43 +90,52 @@ class SurveyViewModel(
         nextId = nextId
     )
 
+    // Gets a Node from ID or throws if missing
     private fun nodeOf(id: String): Node =
         graph[id] ?: error("Node not found: id=$id (defined nodes=${graph.keys})")
 
-    /* ---------- BackStack / current node ---------- */
-    private val nodeStack = ArrayDeque<String>() // visited path (ids)
+    // Internal stack tracking visited nodes
+    private val nodeStack = ArrayDeque<String>()
+
+    // StateFlow holding the currently displayed node
     private val _currentNode = MutableStateFlow(Node(id = "Loading", type = NodeType.START))
     val currentNode: StateFlow<Node> = _currentNode.asStateFlow()
 
+    // Whether back navigation is possible
     val canGoBack: StateFlow<Boolean> =
         MutableStateFlow(false).also { out ->
             _currentNode.subscribe { out.value = nodeStack.size > 1 }
         }
 
-    /* ---------- UI events ---------- */
+    // UI-level events such as snackbars or alerts
     private val _events = MutableSharedFlow<UiEvent>(extraBufferCapacity = 8)
     val events: SharedFlow<UiEvent> = _events.asSharedFlow()
 
-    /* ---------- Questions / Answers (insertion-ordered) ---------- */
+    // Question map (id to text) to persist during flow
     private val _questions = MutableStateFlow(LinkedHashMap<String, String>() as Map<String, String>)
     val questions: StateFlow<Map<String, String>> = _questions.asStateFlow()
+
     fun setQuestion(text: String, key: String) {
         _questions.update { it.mutableLinked().apply { put(key, text) } }
     }
+
     fun getQuestion(key: String): String = questions.value[key].orEmpty()
     fun resetQuestions() { _questions.value = LinkedHashMap() }
 
+    // Answer map (id to response)
     private val _answers = MutableStateFlow(LinkedHashMap<String, String>() as Map<String, String>)
     val answers: StateFlow<Map<String, String>> = _answers.asStateFlow()
+
     fun setAnswer(text: String, key: String) {
         _answers.update { it.mutableLinked().apply { put(key, text) } }
     }
+
     fun getAnswer(key: String): String = answers.value[key].orEmpty()
     fun clearAnswer(key: String) {
         _answers.update { it.mutableLinked().apply { remove(key) } }
     }
 
-    /* ---------- Single / Multi (ephemeral per node) ---------- */
+    // Single-choice and multi-choice selections (ephemeral)
     private val _single = MutableStateFlow<String?>(null)
     val single: StateFlow<String?> = _single.asStateFlow()
     fun setSingleChoice(opt: String?) { _single.value = opt }
@@ -131,12 +145,15 @@ class SurveyViewModel(
     fun toggleMultiChoice(opt: String) {
         _multi.update { cur -> cur.toMutableSet().apply { if (!add(opt)) remove(opt) } }
     }
+
     fun clearSelections() {
         _single.value = null
         _multi.value = emptySet()
     }
 
-    /* ---------- Follow-ups (per node, ordered) ---------- */
+    /**
+     * Data class representing one follow-up QA entry.
+     */
     data class FollowupEntry(
         val question: String,
         val answer: String? = null,
@@ -187,7 +204,9 @@ class SurveyViewModel(
         }
     }
 
-    /* ---------- Prompt (from prompts list) ---------- */
+    /**
+     * Returns a rendered prompt for a given node/question/answer set.
+     */
     fun getPrompt(nodeId: String, question: String, answer: String): String {
         val tpl = config.prompts.firstOrNull { it.nodeId == nodeId }?.prompt
             ?: throw IllegalArgumentException("No prompt defined for nodeId=$nodeId")
@@ -201,7 +220,9 @@ class SurveyViewModel(
         )
     }
 
-    /** Simple template renderer replacing placeholders like {{KEY}} (whitespace tolerant). */
+    /**
+     * Replaces placeholders in templates using the format {{KEY}}.
+     */
     private fun renderTemplate(template: String, vars: Map<String, String>): String {
         var out = template
         for ((k, v) in vars) {
@@ -210,9 +231,7 @@ class SurveyViewModel(
         return out
     }
 
-    /* ============================================================
-     * Navigation helpers
-     * ============================================================ */
+    // Navigation helpers
     private fun navKeyFor(node: Node): NavKey = when (node.type) {
         NodeType.START -> FlowHome
         NodeType.TEXT -> FlowText
@@ -223,6 +242,9 @@ class SurveyViewModel(
         NodeType.DONE -> FlowDone
     }
 
+    /**
+     * Pushes a node into the stack and navigates to its destination.
+     */
     @Synchronized
     private fun push(node: Node) {
         _currentNode.value = node
@@ -231,7 +253,7 @@ class SurveyViewModel(
         Log.d(TAG, "push -> ${node.id}")
     }
 
-    /** 次ノードで質問文が未登録ならプリロードする */
+    /** Preloads question if not yet cached */
     private fun ensureQuestion(id: String) {
         if (getQuestion(id).isEmpty()) {
             val q = nodeOf(id).question
@@ -239,10 +261,10 @@ class SurveyViewModel(
         }
     }
 
-    /** 画面遷移時のUI一時状態掃除（必要に応じてUIから呼ぶ） */
+    /** Call from UI to reset transient state per node */
     fun onNodeChangedResetSelections() = clearSelections()
 
-    /** 任意のノードへジャンプ（履歴に積む） */
+    /** Navigates to the specified node and adds it to history */
     @Synchronized
     fun goto(nodeId: String) {
         val node = nodeOf(nodeId)
@@ -250,7 +272,7 @@ class SurveyViewModel(
         push(node)
     }
 
-    /** 現在のノードを置き換えてジャンプ（履歴を汚さない） */
+    /** Replaces current node in history (i.e., jump without stacking) */
     @Synchronized
     fun replaceTo(nodeId: String) {
         val node = nodeOf(nodeId)
@@ -263,7 +285,7 @@ class SurveyViewModel(
         Log.d(TAG, "replaceTo -> ${node.id}")
     }
 
-    /** Startへ完全リセット（NavBackStackも初期化） */
+    /** Resets navigation to the first node */
     @Synchronized
     fun resetToStart() {
         nav.clear()
@@ -275,7 +297,7 @@ class SurveyViewModel(
         Log.d(TAG, "resetToStart() -> ${start.id}")
     }
 
-    /** 1つ戻る。ルートではNo-Op。 */
+    /** Navigates back to previous node (no-op at root) */
     @Synchronized
     fun backToPrevious() {
         if (nodeStack.size <= 1) {
@@ -289,7 +311,7 @@ class SurveyViewModel(
         Log.d(TAG, "backToPrevious -> $prevId")
     }
 
-    /** 線形next遷移。nextId未設定なら何もしない。 */
+    /** Moves forward to next node if defined */
     @Synchronized
     fun advanceToNext() {
         val cur = _currentNode.value
@@ -304,9 +326,7 @@ class SurveyViewModel(
         push(nodeOf(nextId))
     }
 
-    /* ============================================================
-     * Internal helpers
-     * ============================================================ */
+    // Internal collection helpers
     private fun Map<String, String>.mutableLinked(): LinkedHashMap<String, String> =
         if (this is LinkedHashMap<String, String>) LinkedHashMap(this) else LinkedHashMap(this)
 
@@ -319,11 +339,11 @@ class SurveyViewModel(
     private fun <T> LinkedHashMap<String, MutableList<T>>.toImmutableLists(): Map<String, List<T>> =
         this.mapValues { it.value.toList() }
 
-    // tiny helper to mirror flows without external deps
     private fun <T> StateFlow<T>.subscribe(onEach: (T) -> Unit) {
         onEach(value)
     }
 
+    // Initialize graph and set first node
     init {
         graph = config.graph.nodes.associateBy { it.id }.mapValues { (_, dto) -> dto.toNode() }
         val start = nodeOf(startId)

@@ -1,5 +1,6 @@
 package com.negi.survey.vm
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.negi.survey.slm.FollowupExtractor
@@ -33,39 +34,31 @@ class AiViewModel(
 ) : ViewModel() {
 
     private val _loading = MutableStateFlow(false)
-    /** True while an evaluation is running. */
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
 
     private val _score = MutableStateFlow<Int?>(null)
-    /** Extracted score in [0,100], or null if not available. */
     val score: StateFlow<Int?> = _score.asStateFlow()
 
     private val _stream = MutableStateFlow("")
-    /** Streaming text from the model (incrementally appended). */
     val stream: StateFlow<String> = _stream.asStateFlow()
 
     private val _raw = MutableStateFlow<String?>(null)
-    /** Full raw model output after completion. */
     val raw: StateFlow<String?> = _raw.asStateFlow()
 
     private val _followupQuestion = MutableStateFlow<String?>(null)
-    /** Extracted follow-up question, if any. */
     val followupQuestion: StateFlow<String?> = _followupQuestion.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
-    /** Non-null when an error/timeout/cancel happens (UI-friendly string). */
     val error: StateFlow<String?> = _error.asStateFlow()
 
     private var evalJob: Job? = null
     private val running = AtomicBoolean(false)
 
-    /** Whether an evaluation is currently running. */
     val isRunning: Boolean
         get() = running.get()
 
     /**
-     * Suspends until evaluation completes and returns the score (or null on failure).
-     * If another evaluation is already running, returns the current score immediately.
+     * Evaluates the given prompt and returns score (or null) after completion.
      */
     suspend fun evaluate(prompt: String, timeoutMs: Long = timeout_ms): Int? {
         if (prompt.isBlank()) {
@@ -73,11 +66,9 @@ class AiViewModel(
             return null
         }
         if (!running.compareAndSet(false, true)) {
-            // Already running → return current value to avoid concurrent work.
-            return _score.value
+            return _score.value // Already running
         }
 
-        // Initialize UI states for a fresh run.
         _loading.value = true
         _score.value = null
         _stream.value = ""
@@ -88,61 +79,55 @@ class AiViewModel(
         val buf = StringBuilder()
 
         try {
-            // Launch the core job so that external cancel() can interrupt it.
             evalJob = viewModelScope.launch(ioDispatcher) {
                 try {
                     withTimeout(timeoutMs) {
-                        // Collect streaming parts and append to StateFlow.
                         repo.request(prompt).collect { part ->
                             buf.append(part)
-                            // It's safe to update StateFlow from a background dispatcher.
                             _stream.update { it + part }
                         }
                     }
 
-                    // After successful collection, extract final values.
-                    val rawText = buf.toString()
+                    val rawText = buf.toString().ifBlank { _stream.value }
                     val s = clampScore(FollowupExtractor.extractScore(rawText))
                     val q = FollowupExtractor.extractFollowupQuestion(rawText)
 
                     _raw.value = rawText
                     _score.value = s
                     _followupQuestion.value = q
+
+                    Log.d("AiViewModel", "Evaluation completed: score=$s, followup=${q != null}")
                 } catch (e: TimeoutCancellationException) {
                     _error.value = "timeout"
+                    Log.w("AiViewModel", "Evaluation timeout", e)
                 } catch (e: CancellationException) {
-                    // Propagate cancellation while marking an error for UI.
                     _error.value = "cancelled"
+                    Log.w("AiViewModel", "Evaluation cancelled", e)
                     throw e
                 } catch (e: Throwable) {
                     _error.value = e.message ?: "error"
+                    Log.e("AiViewModel", "Evaluation error", e)
                 }
             }
 
-            // Wait for completion and then return the (possibly null) score.
             evalJob?.join()
             return _score.value
         } finally {
             _loading.value = false
             running.set(false)
-            try {
-                // Ensure the job is cleaned up even if already completed.
-                evalJob?.cancel()
-            } catch (_: Throwable) { /* no-op */ }
+            evalJob?.cancel()
             evalJob = null
         }
     }
 
     /**
-     * Fire-and-forget version of evaluate().
-     * Returns a Job immediately; observe StateFlows for progress/results.
+     * Fire-and-forget evaluate
      */
     fun evaluateAsync(prompt: String, timeoutMs: Long = timeout_ms): Job =
         viewModelScope.launch {
             evaluate(prompt, timeoutMs)
         }
 
-    /** Cancels the running evaluation, if any, and clears the running/loading flags. */
     fun cancel() {
         try {
             evalJob?.cancel()
@@ -152,10 +137,8 @@ class AiViewModel(
         _loading.value = false
     }
 
-    /** Resets only the UI states; does not perform any network/model call. */
     fun resetStates(keepError: Boolean = false) {
         cancel()
-        _loading.value = false
         _score.value = null
         _stream.value = ""
         _raw.value = null
@@ -168,6 +151,5 @@ class AiViewModel(
         cancel()
     }
 
-    /** Clamp scores to the [0, 100] range to stabilize UI logic. */
     private fun clampScore(s: Int?): Int? = s?.coerceIn(0, 100)
 }

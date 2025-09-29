@@ -12,20 +12,30 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 
+/**
+ * UI representation of a file upload task.
+ */
 data class UploadItemUi(
     val id: String,
     val fileName: String,
     val percent: Int?,        // null = unknown
     val state: WorkInfo.State,
-    val fileUrl: String?,     // set on success
+    val fileUrl: String?,     // populated when upload succeeds
     val message: String? = null
 )
 
+/**
+ * ViewModel that observes file uploads via WorkManager.
+ * Transforms WorkInfo states into UI-friendly data stream.
+ */
 class UploadQueueViewModel(app: Application) : AndroidViewModel(app) {
 
     private val wm = WorkManager.getInstance(app)
 
-    // ✅ getWorkInfosByTagLiveData -> asFlow() が一番安定
+    /**
+     * A flow that emits the list of current uploads, sorted by priority.
+     * Uses LiveData -> Flow bridge for best reliability with WorkManager.
+     */
     val itemsFlow: Flow<List<UploadItemUi>> =
         wm.getWorkInfosByTagLiveData(GitHubUploadWorker.TAG)
             .asFlow()
@@ -73,7 +83,9 @@ class UploadQueueViewModel(app: Application) : AndroidViewModel(app) {
                     }.thenBy { it.fileName }
                 )
             }
-            // 無駄な再描画を抑制（state/pct/url/件数が変わった時だけ）
+            /**
+             * Avoid unnecessary UI redraws unless items actually change.
+             */
             .distinctUntilChanged { old, new ->
                 if (old.size != new.size) return@distinctUntilChanged false
                 old.zip(new).all { (a, b) ->
@@ -85,6 +97,9 @@ class UploadQueueViewModel(app: Application) : AndroidViewModel(app) {
             }
 
     companion object {
+        /**
+         * Factory method for ViewModel instantiation in Compose.
+         */
         fun factory(app: Application) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =

@@ -2,60 +2,47 @@ package com.negi.survey.slm
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.onFailure
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
-import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 
 /**
- * Abstraction for a text-only, streaming AI scoring endpoint.
- *
- * Contract:
- * - [request] returns a cold [Flow] that emits streaming text chunks from the model.
- * - The returned Flow completes normally when the underlying generation completes.
- * - Cancellation of the collector cancels the in-flight model request.
+ * Contract interface for any class that can provide streaming inference responses.
  */
 interface Repository {
     /**
-     * Send a single prompt and receive streaming text chunks.
+     * Returns a Flow of streaming text chunks in response to a user prompt.
      *
-     * @param prompt User-provided prompt text (may be blank).
-     * @return A cold [Flow] of text chunks; collect to start the request.
+     * @param prompt The user-provided input string (can be blank)
+     * @return Flow<String> emitting chunks of the response as they arrive
      */
     suspend fun request(prompt: String): Flow<String>
 }
 
 /**
- * Repository implementation backed by MediaPipe (text-only).
+ * Direct implementation of Repository using the Small Language Model (SLM).
  *
- * Responsibilities:
- * - Ensures the underlying [InferenceModel] is initialized before each request.
- * - Serializes requests process-wide via a global [Semaphore] to enforce single concurrency.
- * - Wraps the prompt with role-turn markers and strict-output guardrails before dispatch.
- * - Bridges the model's [InferenceModel.partialResults] into a consumer-friendly [Flow].
- *
- * Threading/Lifecycle:
- * - Uses a cold [callbackFlow] per request; collection starts the request and sets up
- *   a child coroutine to forward partial updates. Cancelling the collector cancels the request.
- * - Holds ApplicationContext via [InferenceModel.getInstance] to avoid leaks.
+ * This class handles:
+ * - Lazy initialization of the SLM model
+ * - Serializing requests using a Semaphore to avoid race conditions
+ * - Prompt formatting with required markers and instructions
+ * - Wrapping callback-style inference into a Coroutine Flow
  */
-class MediaPipeRepository(
-    private val appContext: Context
+class SlmDirectRepository(
+    private val appContext: Context,
+    private val model: Model
 ) : Repository {
 
-    // Lazily obtain the singleton model (stores ApplicationContext internally).
-    private val model by lazy { InferenceModel.getInstance(appContext) }
-
     companion object {
-        private const val TAG = "MediaPipeRepository"
+        private const val TAG = "SlmDirectRepository"
 
-        // Single-flight gate across all repository instances to avoid overlapping runs.
-        private val globalGate = Semaphore(1)
-
-        // Strict-output guardrails appended to the user's turn.
+        // Output rule for strict JSON: No markdown, code blocks, or extras
         private const val STRICT_RULES = """
             STRICT OUTPUT (NO MARKDOWN):
             - Entire output < 512 chars.
@@ -63,17 +50,19 @@ class MediaPipeRepository(
             - Output must be ONE LINE; first char '{', last char '}'.
             - No explanations or extra text.
         """
+
         private const val USER_TURN_PREFIX = "<start_of_turn>user"
         private const val MODEL_TURN_PREFIX = "<start_of_turn>model"
         private const val TURN_END = "<end_of_turn>"
         private const val EMPTY_JSON_INSTRUCTION = "Respond with an empty JSON object: {}"
+
+        // Global semaphore to ensure only one concurrent request across all instances
+        private val globalGate = Semaphore(1)
     }
 
     /**
-     * Build the strict, role-wrapped prompt expected by the model.
-     *
-     * @param body Raw user prompt body (already trimmed/normalized by caller if needed).
-     * @return The turn-annotated prompt string.
+     * Formats a user prompt into the structured input expected by the model,
+     * including turn labels and strict output rules.
      */
     private fun wrapWithTurns(body: String): String = """
         $USER_TURN_PREFIX
@@ -82,62 +71,65 @@ class MediaPipeRepository(
         $TURN_END
         $MODEL_TURN_PREFIX
     """.trimIndent()
-    // Explanation: The model is instructed to produce one-line raw JSON under tight constraints.
 
     /**
-     * Start a single streaming request and return a cold [Flow] of text chunks.
-     *
-     * Behavior:
-     * - Ensures the model is initialized (non-blocking callers receive a stream error if init fails).
-     * - Serializes requests via [globalGate] so only one generation runs at a time.
-     * - Forwards non-empty partials downstream; completes the flow on terminal signal.
-     * - On collector cancellation, forwards a cancel to the model and closes the channel.
-     *
-     * @param prompt User prompt text (blank is allowed; an empty-JSON instruction will be used).
+     * Ensures that the model is initialized before usage.
+     * Runs on a background thread and returns an error string if failed.
+     */
+    private suspend fun ensureInitialized(): String = withContext(Dispatchers.Default) {
+        var err = ""
+        SLM.initialize(appContext, model) { msg ->
+            err = msg
+        }
+        err
+    }
+
+    /**
+     * Sends the given prompt to the SLM model and returns a Flow emitting partial results.
      */
     override suspend fun request(prompt: String): Flow<String> = callbackFlow {
         globalGate.withPermit {
-            // Ensure model is ready; if init fails, emit an error JSON and close the stream.
-            runCatching { model.ensureLoaded() }.onFailure {
-                Log.e(TAG, "ensureLoaded failed: ${it.message}", it)
-                trySend("""{"error":"${it.message ?: "model init failed"}"}""")
+            val initErr = ensureInitialized()
+            if (initErr.isNotEmpty()) {
+                trySend("""{"error":"$initErr"}""")
                 close()
                 return@withPermit
             }
 
-            val effectiveBody = if (prompt.isBlank()) EMPTY_JSON_INSTRUCTION else prompt
-            val fullPrompt = wrapWithTurns(effectiveBody)
-            val reqId = model.startRequest(fullPrompt)
-            Log.d(TAG, "request started reqId=$reqId len=${fullPrompt.length}")
+            val effectivePrompt = if (prompt.isBlank()) EMPTY_JSON_INSTRUCTION else prompt
+            val fullPrompt = wrapWithTurns(effectivePrompt)
 
+            Log.d(TAG, "SLM request start len=${fullPrompt.length}")
 
-            var finished = false
+            val channel = this // Explicit capture of callbackFlow's channel
 
-            // Bridge model partials into this callbackFlow; only forward chunks for this reqId.
-            val collectJob = launch {
-                model.partialResults
-                    .filter { it.requestId == reqId }
-                    .collect { pr ->
-                        if (pr.text.isNotEmpty()) {
-                            this@callbackFlow.send(pr.text)
-                            // Explanation: Forward only non-empty deltas to reduce noise.
+            // Start inference asynchronously and stream results into the channel
+            val inferenceJob = launch {
+                SLM.runInference(
+                    model = model,
+                    input = fullPrompt,
+                    listener = { partial, done ->
+                        if (partial.isNotEmpty()) {
+                            channel.trySend(partial).onFailure {
+                                Log.w(TAG, "trySend failed: ${it?.message}")
+                            }
                         }
-                        if (pr.done) {
-                            finished = true
-                            Log.d(TAG, "request done reqId=$reqId")
-                            this@callbackFlow.close()
+                        if (done) {
+                            Log.d(TAG, "SLM inference done.")
+                            channel.close() // Close the flow when done
                         }
+                    },
+                    onClean = {
+                        Log.d(TAG, "SLM cleanup completed for model='${model.name}'")
                     }
+                )
             }
 
-            // Channel close/cancel handler: cancel collection and propagate cancel to model if needed.
+            // Flow cancellation / completion
             awaitClose {
-                Log.d(TAG, "awaitClose reqId=$reqId finished=$finished -> cancel=${!finished}")
-                collectJob.cancel()
-                if (!finished) {
-                    runCatching { model.cancelRequest(reqId) }
-                    // Explanation: Safe best-effort cancel; SLM handles edge cases internally.
-                }
+                inferenceJob.cancel()
+                SLM.cancel(model)
+                Log.d(TAG, "callbackFlow closed by awaitClose")
             }
         }
     }
