@@ -1,27 +1,76 @@
 {
   "prompts": [
-    {"nodeId":"Q1","prompt":"You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer to the question (e.g., a days-to-maturity value or range).\n- Ask EXACTLY 3 follow-up questions for the question.\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting (units phrasing, punctuation, casing, etc.).\n\nOUTPUT RULES:\n- In English.\n- Keys: \"analysis\" (string), \"expected answer\", \"follow-up questions\" (array of 3 strings), \"score\" (int 1-100).\n- Entire output <512 chars.\n\nSTRICT OUTPUT (NO MARKDOWN):\n- Return RAW JSON only. DO NOT use Markdown, code fences, or backticks.\n- Output must be ONE LINE; first char '{', last char '}'.\n- No explanations or extra text.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"},
-    {"nodeId":"Q2","prompt":"You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer (typical days from planting to harvest; a value or range). Note seasonal variation if relevant.\n- Ask EXACTLY 3 follow-up questions (how days were measured, season context, sample size/experience).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nOUTPUT RULES:\n- In English.\n- Keys: \"analysis\", \"expected answer\", \"follow-up questions\" (3), \"score\" (int 1-100).\n- Entire output <512 chars.\n\nSTRICT OUTPUT (NO MARKDOWN):\n- Return RAW JSON only. One line. No extra text.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"},
-    {"nodeId":"Q3","prompt":"You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer (a calendar month, e.g., \"October\" or \"late October\").\n- Ask EXACTLY 3 follow-ups (calendar system used, local climate/short rains timing, definition of \"early\").\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nOUTPUT RULES:\n- In English.\n- Keys: \"analysis\", \"expected answer\", \"follow-up questions\" (3), \"score\" (int 1-100).\n- Entire output <512 chars.\n\nSTRICT OUTPUT (NO MARKDOWN): RAW JSON only, one line, no extra text.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"},
-    {"nodeId":"Q4","prompt":"You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer stating the maximum acceptable yield loss (any clear unit is fine: %, bags/acre, or equivalent).\n- Ask EXACTLY 3 follow-ups (unit preference, baseline yield, risk tolerance/context).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nOUTPUT RULES:\n- In English.\n- Keys: \"analysis\", \"expected answer\", \"follow-up questions\" (3), \"score\" (int 1-100).\n- Entire output <512 chars.\n\nSTRICT OUTPUT (NO MARKDOWN): RAW JSON only, one line, no extra text.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"},
-    {"nodeId":"Q5","prompt":"You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer naming two top factors (flexible phrasing allowed) with a short rationale.\n- Ask EXACTLY 3 follow-ups (trade-offs, ranking, context such as market vs agronomy).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nOUTPUT RULES:\n- In English.\n- Keys: \"analysis\", \"expected answer\", \"follow-up questions\" (3), \"score\" (int 1-100).\n- Entire output <512 chars.\n\nSTRICT OUTPUT (NO MARKDOWN): RAW JSON only, one line, no extra text.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"}
+    {
+      "nodeId": "Q1",
+      "prompt": "You are an English survey QA grader. Read the Question and the farmer's Answer.\n\nTask:\n- Briefly note weaknesses (e.g., unclear units, missing seasons, outliers).\n- Provide a single strong expected answer: average FAW yield loss over the past 3 seasons (use % or bags/acre) and note variability if high.\n- Ask EXACTLY 3 follow-ups: (1) unit & baseline yield, (2) per-season values for last 3 seasons, (3) how the farmer estimated it.\n- Give a 1–100 integer score for content quality.\n\nOutput rules:\n- English.\n- Keys: \"analysis\",\"expected answer\",\"follow-up questions\" (3 items),\"score\" (int 1-100).\n- Entire output <512 chars.\n- STRICT: Return RAW JSON only, one line, no markdown/backticks.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q2",
+      "prompt": "You are an English survey QA grader. Read the Question and the farmer's Answer.\n\nTask:\n- Briefly note weaknesses (e.g., vague trade-off, no units, no rationale).\n- Provide a strong expected answer: willingness-to-accept yield loss to harvest 10 days earlier (state % or bags/acre) with a one-clause reason (e.g., rain risk/price).\n- Ask EXACTLY 3 follow-ups: (1) why 10 days matters, (2) past experience trading yield for earliness, (3) max acceptable loss before saying no.\n- Give a 1–100 integer score for content quality.\n\nOutput rules:\n- English. Keys as above. <512 chars. STRICT one-line RAW JSON only.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q3",
+      "prompt": "You are an English survey QA grader. Read the Question and the farmer's Answer.\n\nTask:\n- Briefly note weaknesses (e.g., no threshold, unclear measure, pest vs disease mixed).\n- Provide a strong expected answer: a clear switching threshold (e.g., ≥X% plants/ears with moderate+ damage, or severity level at tasseling).\n- Ask EXACTLY 3 follow-ups: (1) measure used (% plants/ears or severity scale), (2) pests/diseases included, (3) growth stage/time window.\n- Score 1–100 (integer) for content quality.\n\nOutput rules:\n- English. Keys: \"analysis\",\"expected answer\",\"follow-up questions\" (3),\"score\" (int 1-100). <512 chars. STRICT one-line RAW JSON only.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q4",
+      "prompt": "You are an English survey QA grader. Read the Question and the farmer's Answer.\n\nTask:\n- Briefly note weaknesses (e.g., generic traits, missing numbers).\n- Provide a strong expected answer listing 2–3 concrete replacement expectations, each with a compact numeric or categorical target (e.g., DTM ≤95 days; FAW: low damage at V6–VT; drought tolerance at silking; typical yield ≥X bags/acre).\n- Ask EXACTLY 3 follow-ups: (1) rank top trait, (2) numeric earliness/yield targets, (3) acceptable seed price change.\n- Score 1–100 (integer).\n\nOutput rules:\n- English. Keys as specified. <512 chars. STRICT one-line RAW JSON only.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q5",
+      "prompt": "You are an English survey QA grader. Read the Question and the farmer's Answer.\n\nTask:\n- Briefly note weaknesses (e.g., no baseline, no unit, no decision rule).\n- Provide a strong expected answer: minimum acceptable harvest in a bad year as % of usual harvest or bags/acre, plus a short rule for replant/replace.\n- Ask EXACTLY 3 follow-ups: (1) usual/average harvest baseline, (2) recent bad-year example and result, (3) coping actions if below threshold.\n- Score 1–100 (integer).\n\nOutput rules:\n- English. Keys as specified. <512 chars. STRICT one-line RAW JSON only.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q6",
+      "prompt": "You are an English survey QA grader. Read the Question and the farmer's Answer.\n\nTask:\n- Briefly note weaknesses (e.g., vague timing, no stage, no symptoms).\n- Provide a strong expected answer: the most damaging drought moment as a crop stage (e.g., tasseling/silking or grain fill) with a one-clause reason (pollination failure, kernel abortion).\n- Ask EXACTLY 3 follow-ups: (1) stage definition used, (2) concrete season example, (3) key symptoms/field signs observed.\n- Score 1–100 (integer).\n\nOutput rules:\n- English. Keys as specified. <512 chars. STRICT one-line RAW JSON only.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    }
   ],
   "graph": {
     "startId": "Start",
     "nodes": [
       { "id": "Start", "type": "START", "title": "Start", "question": "Start", "nextId": "Q1" },
-
-      { "id": "Q1", "type": "AI", "title": "Early Maturity (Days)",
-        "question": "What do you consider an early-maturing maize variety? Please answer in days to maturity.", "nextId": "Q2" },
-      { "id": "Q2", "type": "AI", "title": "Current Variety DTM",
-        "question": "In most seasons, how many days does your current maize variety take from planting to harvest?", "nextId": "Q3" },
-      { "id": "Q3", "type": "AI", "title": "Short Rains Deadline",
-        "question": "During the short rains in your area, by which calendar month would you need to harvest to consider it early?", "nextId": "Q4" },
-      { "id": "Q4", "type": "AI", "title": "Yield Trade-off",
-        "question": "What maximum yield loss would you accept to harvest earlier—percentage or bags per acre?", "nextId": "Q5" },
-      { "id": "Q5", "type": "AI", "title": "Top Factors",
-        "question": "When choosing an early-maturing variety, which two factors matter most? (e.g., drought escape, pest escape, double-cropping, market timing)", "nextId": "Review" },
-
+      {
+        "id": "Q1",
+        "type": "AI",
+        "title": "FAW Yield Loss (3 Seasons)",
+        "question": "How much yield do you lose because of fall armyworm? Please think back over the last 3 seasons. (Percent or bags per acre are fine.)",
+        "nextId": "Q2"
+      },
+      {
+        "id": "Q2",
+        "type": "AI",
+        "title": "Trade-off for 10-Day Earlier Harvest",
+        "question": "If you could harvest 10 days earlier, how much yield would you be willing to give up? (Percent or bags per acre.)",
+        "nextId": "Q3"
+      },
+      {
+        "id": "Q3",
+        "type": "AI",
+        "title": "Damage Threshold to Switch Variety",
+        "question": "What level of pest or disease damage would make you stop using your current maize variety and switch to a new variety? (Give a clear threshold, e.g., % plants/ears damaged or severity.)",
+        "nextId": "Q4"
+      },
+      {
+        "id": "Q4",
+        "type": "AI",
+        "title": "Expectations for Replacement Variety",
+        "question": "What would you expect from a new maize variety to replace the one you currently grow? Please be as detailed as possible (e.g., DTM, FAW tolerance, drought stage tolerance, typical yield).",
+        "nextId": "Q5"
+      },
+      {
+        "id": "Q5",
+        "type": "AI",
+        "title": "Minimum Acceptable Harvest in Bad Year",
+        "question": "In a bad year, what is the smallest harvest you would accept and still plant this maize again next season? (Percent of usual harvest or bags per acre.)",
+        "nextId": "Q6"
+      },
+      {
+        "id": "Q6",
+        "type": "AI",
+        "title": "Most Damaging Drought Timing",
+        "question": "When in the season is drought most devastating for your crop? What is the most difficult drought moment? (e.g., pre-tassel, tasseling/silking, grain fill, pre-harvest.)",
+        "nextId": "Review"
+      },
       { "id": "Review", "type": "REVIEW", "title": "Review", "question": "", "nextId": "Done" },
       { "id": "Done", "type": "DONE", "title": "Done", "question": "" }
     ]

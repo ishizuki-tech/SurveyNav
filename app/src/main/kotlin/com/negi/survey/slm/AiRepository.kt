@@ -2,7 +2,6 @@ package com.negi.survey.slm
 
 import android.content.Context
 import android.util.Log
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.onFailure
 import kotlinx.coroutines.flow.Flow
@@ -10,7 +9,6 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.withContext
 
 /**
  * Contract interface for any class that can provide streaming inference responses.
@@ -73,28 +71,10 @@ class SlmDirectRepository(
     """.trimIndent()
 
     /**
-     * Ensures that the model is initialized before usage.
-     * Runs on a background thread and returns an error string if failed.
-     */
-    private suspend fun ensureInitialized(): String = withContext(Dispatchers.Default) {
-        var err = ""
-        SLM.initialize(appContext, model) { msg ->
-            err = msg
-        }
-        err
-    }
-
-    /**
      * Sends the given prompt to the SLM model and returns a Flow emitting partial results.
      */
     override suspend fun request(prompt: String): Flow<String> = callbackFlow {
         globalGate.withPermit {
-            val initErr = ensureInitialized()
-            if (initErr.isNotEmpty()) {
-                trySend("""{"error":"$initErr"}""")
-                close()
-                return@withPermit
-            }
 
             val effectivePrompt = if (prompt.isBlank()) EMPTY_JSON_INSTRUCTION else prompt
             val fullPrompt = wrapWithTurns(effectivePrompt)
@@ -116,10 +96,12 @@ class SlmDirectRepository(
                         }
                         if (done) {
                             Log.d(TAG, "SLM inference done.")
+                            SLM.cancel(model)
                             channel.close() // Close the flow when done
                         }
                     },
                     onClean = {
+                        SLM.cancel(model)
                         Log.d(TAG, "SLM cleanup completed for model='${model.name}'")
                     }
                 )
@@ -130,6 +112,9 @@ class SlmDirectRepository(
                 inferenceJob.cancel()
                 SLM.cancel(model)
                 Log.d(TAG, "callbackFlow closed by awaitClose")
+                if (!SLM.isBusy(model)) {
+                    SLM.resetSession(model = model)
+                }
             }
         }
     }

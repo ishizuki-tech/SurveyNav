@@ -19,8 +19,7 @@ class SlmHelperInstrumentationTest {
 
     companion object {
         private const val TAG = "SlmHelperInstrTest"
-        private const val TIMEOUT_SEC = 180L
-        private const val ARG_GPU = "slm.gpu" // -e slm.gpu true で GPU 切替
+        private const val TIMEOUT_SEC = 60L
 
         private lateinit var appCtx: Context
         private lateinit var model: Model
@@ -43,16 +42,12 @@ class SlmHelperInstrumentationTest {
 
     @Before
     fun setUp() {
-        // 初回だけ initialize（以後は同一エンジンを共有）
         if (initialized.compareAndSet(false, true)) {
-            val args = InstrumentationRegistry.getArguments()
-            val useGpu = args.getString(ARG_GPU, "false").equals("true", ignoreCase = true)
-
             model = Model(
                 name = "gemma3-local-test",
                 taskPath = modelRule.internalModel.absolutePath,
                 config = mapOf(
-                    ConfigKey.ACCELERATOR to if (useGpu) Accelerator.GPU.label else Accelerator.CPU.label,
+                    ConfigKey.ACCELERATOR to Accelerator.GPU.label,
                     ConfigKey.MAX_TOKENS to 512,
                     ConfigKey.TOP_K to 40,
                     ConfigKey.TOP_P to 0.9f,
@@ -63,7 +58,6 @@ class SlmHelperInstrumentationTest {
             SLM.initialize(appCtx, model) { err -> errHolder[0] = err }
             assertEquals("Init error: ${errHolder[0]}", "", errHolder[0])
             assertNotNull("Model instance must be created", model.instance)
-            Log.i(TAG, "Initialized backend=${if (useGpu) "GPU" else "CPU"}")
         } else {
             assertNotNull("Model instance must exist", model.instance)
         }
@@ -72,11 +66,11 @@ class SlmHelperInstrumentationTest {
 
     // ========== ヘルパ ==========
 
-    private fun waitUntilBusy(expectBusy: Boolean, timeoutMs: Long = 4000): Boolean {
+    private fun waitUntilBusy(expectBusy: Boolean, timeoutMs: Long = 5_000): Boolean {
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
         while (System.nanoTime() < deadline) {
             if (SLM.isBusy(model) == expectBusy) return true
-            Thread.sleep(50)
+            Thread.sleep(15)
         }
         return false
     }
@@ -84,40 +78,38 @@ class SlmHelperInstrumentationTest {
     /** ストリーム完了まで待機して結果を返す（partial→連結、done→最終保障） */
     private fun askAndAwait(prompt: String, timeoutSec: Long = TIMEOUT_SEC): String {
 
-        if (!SLM.isBusy(model)) {
-            SLM.resetSession(model = model)
-        }
-
         val done = CountDownLatch(1)
         val sb = StringBuilder()
-        val gotPartial = AtomicBoolean(false)
-
         SLM.runInference(
             model = model,
             input = prompt,
-            resultListener = { partial, finished ->
+            listener = { partial, finished ->
                 if (partial.isNotEmpty()) {
-                    Log.i(TAG, "partial=${partial.take(120)}")
-                    if (!finished || !gotPartial.get()) {
+                    if (!finished) {
+                        Log.i(TAG, "partial=$partial")
                         sb.append(partial) // done時の全文と二重連結しない工夫
-                        SLM.cancel(model = model)
+//                        SLM.cancel(model = model)
                     }
-                    gotPartial.set(true)
                 }
                 if (finished) done.countDown()
             },
-            cleanUpListener = { done.countDown() }
+            onClean = { done.countDown() }
         )
 
         assertTrue("generation did not finish within $timeoutSec sec",
             done.await(timeoutSec, TimeUnit.SECONDS)
         )
 
-        assertTrue("busy should drop to false after finish", waitUntilBusy(false, 4000))
+        assertTrue("busy should drop to false after finish", waitUntilBusy(false))
 
         val out = sb.toString().trim()
         Log.i(TAG, "final(${out.length})=${out.take(200)}")
         assertTrue("output should not be blank", out.isNotBlank())
+
+        if (!SLM.isBusy(model)) {
+            SLM.resetSession(model = model)
+        }
+
         return out
     }
 
@@ -129,17 +121,21 @@ class SlmHelperInstrumentationTest {
         SLM.runInference(
             model = model,
             input = prompt,
-            resultListener = { partial, finished ->
-                Log.i(TAG, "partial=${partial.take(120)}")
-                if (partial.isNotEmpty()) sb.append(partial)
+            listener = { partial, finished ->
+                if (partial.isNotEmpty()) {
+                    Log.i(TAG, "partial=$partial")
+                    if (!finished) {
+                        sb.append(partial) // done時の全文と二重連結しない工夫
+                    }
+                }
                 if (finished) done.countDown()
             },
-            cleanUpListener = { done.countDown() }
+            onClean = { done.countDown() }
         )
 
-        assertTrue("busy should be true shortly after start", waitUntilBusy(true, 4000))
+        assertTrue("busy should be true shortly after start", waitUntilBusy(true))
         assertTrue("generation did not finish within $timeoutSec sec", done.await(timeoutSec, TimeUnit.SECONDS))
-        assertTrue("busy should drop to false after finish", waitUntilBusy(false, 4000))
+        assertTrue("busy should drop to false after finish", waitUntilBusy(false))
 
         return sb.toString()
     }
@@ -152,42 +148,38 @@ class SlmHelperInstrumentationTest {
 
     // ========== テストケース ==========
 
-    @Test fun generate_simple_prompt_returns_text1() { assertTrue(askAndAwait("ラーメンの作り方を教えて下さい").isNotBlank()) }
-    @Test fun generate_simple_prompt_returns_text2() { assertTrue(askAndAwait("ラーメンの作り方を教えて下さい").isNotBlank()) }
-    @Test fun generate_simple_prompt_returns_text3() { assertTrue(askAndAwait("ラーメンの作り方を教えて下さい").isNotBlank()) }
-    @Test fun generate_simple_prompt_returns_text4() { assertTrue(askAndAwait("ラーメンの作り方を教えて下さい").isNotBlank()) }
+    @Test fun generate_simple_prompt_returns_text1() { assertTrue(askAndAwait("100文字でラーメンの作り方を教えて下さい").isNotBlank()) }
+    @Test fun generate_simple_prompt_returns_text2() { assertTrue(askAndAwait("100文字でラーメンの作り方を教えて下さい").isNotBlank()) }
+    @Test fun generate_simple_prompt_returns_text3() { assertTrue(askAndAwait("100文字でラーメンの作り方を教えて下さい").isNotBlank()) }
+    @Test fun generate_simple_prompt_returns_text4() { assertTrue(askAndAwait("100文字でラーメンの作り方を教えて下さい").isNotBlank()) }
 
     /** ▼ キャンセル本体の動作検証 */
     @Test
     fun cancel_stops_generation_and_allows_next() {
         val done = CountDownLatch(1)
-        // 1) 長文生成を開始
         SLM.runInference(
             model = model,
             input = longPrompt(),
-            resultListener = { partial, finished ->
-                Log.i(TAG, "partial=${partial.take(120)}")
+            listener = { partial, finished ->
+                Log.i(TAG, "partial=$partial")
                 if (finished) done.countDown()
             },
-            cleanUpListener = { done.countDown() }
+            onClean = { done.countDown() }
         )
 
-        // 2) busy になるのを確認
-        assertTrue("busy should become true", waitUntilBusy(true, 4000))
+        assertTrue("busy should become true", waitUntilBusy(true))
 
-        // 3) キャンセル呼び出し
         val tCancel = SystemClock.elapsedRealtime()
 
         SLM.cancel(model = model)
 
-        // 4) 完了待ち（SDK 非対応でも cancel() が即 busy=false にする実装なのでOK）
         done.await(TIMEOUT_SEC, TimeUnit.SECONDS) // 成否は問わず待ってみる（ログ確認用）
-        assertTrue("busy should drop after cancel/done", waitUntilBusy(false, 8000))
+
+        assertTrue("busy should drop after cancel/done", waitUntilBusy(false))
 
         val tDone = SystemClock.elapsedRealtime()
-        Log.i(TAG, "cancel→done elapsed = ${tDone - tCancel} ms")
+        Log.i(TAG, "cancel → done elapsed = ${tDone - tCancel} ms")
 
-        // 5) 次の問い合わせが通る（セッション健全）
         val out2 = askAndAwaitStrict("Confirm you can respond after a cancel.")
         assertTrue("output after cancel should not be blank", out2.isNotBlank())
     }
