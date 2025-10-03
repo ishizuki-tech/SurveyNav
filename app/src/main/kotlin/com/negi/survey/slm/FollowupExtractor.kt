@@ -94,7 +94,7 @@ object FollowupExtractor {
      */
     @JvmStatic
     fun extractFollowupQuestion(rawText: String): String? =
-        runCatching { fromRaw(rawText, max = 1).firstOrNull() }
+        runCatching { fromRaw(rawText, max = 3).firstOrNull() }
             .getOrNull()
             ?.takeIf { it.isNotBlank() }
 

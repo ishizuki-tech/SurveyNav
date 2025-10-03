@@ -599,3 +599,37 @@ class ModelAssetRule(
         }
     }
 }
+
+/* ---------- chunked logger ---------- */
+object Logx {
+    private const val CHUNK = 3000
+    fun i(tag: String, msg: String) = Log.println(Log.INFO, tag, msg)
+    fun w(tag: String, msg: String) = Log.println(Log.WARN, tag, msg)
+    fun kv(tag: String, title: String, pairs: Map<String, String?>) {
+        val body = buildString { pairs.forEach { (k, v) -> appendLine("$k: ${v ?: "null"}") } }.trimEnd()
+        block(tag, title, body)
+    }
+    fun block(tag: String, title: String, body: String) {
+        printChunked(Log.INFO, tag, "╔═ $title")
+        if (body.isNotEmpty()) {
+            val lines = body.split("\n")
+            val sb = StringBuilder()
+            for (line in lines) {
+                val ln = "║ $line"
+                if (sb.length + ln.length > CHUNK) { printChunked(Log.INFO, tag, sb.toString()); sb.clear() }
+                sb.appendLine(ln)
+            }
+            if (sb.isNotEmpty()) printChunked(Log.INFO, tag, sb.toString())
+        }
+        printChunked(Log.INFO, tag, "╚═ end")
+    }
+    private fun printChunked(priority: Int, tag: String, text: String) {
+        if (text.length <= CHUNK) { Log.println(priority, tag, text); return }
+        var i = 0; var idx = 1; val total = (text.length + CHUNK - 1) / CHUNK
+        while (i < text.length) {
+            val end = (i + CHUNK).coerceAtMost(text.length)
+            Log.println(priority, tag, "[$idx/$total] ${text.substring(i, end)}")
+            i = end; idx++
+        }
+    }
+}

@@ -1,0 +1,135 @@
+{
+  "prompts": [
+    {
+      "nodeId": "Q1",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer to the question (e.g., a days-to-maturity value or range).\n- Ask EXACTLY 3 follow-up questions for the question.\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting (units phrasing, punctuation, casing, etc.).\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q2",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer (typical days from planting to harvest; a value or range). Note seasonal variation if relevant.\n- Ask EXACTLY 3 follow-up questions (how days were measured, season context, sample size/experience).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q3",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer (a calendar month, e.g., \"October\" or \"late October\").\n- Ask EXACTLY 3 follow-ups (calendar system used, local climate/short rains timing, definition of \"early\").\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q4",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer stating the maximum acceptable yield loss (any clear unit is fine: %, bags/acre, or equivalent).\n- Ask EXACTLY 3 follow-ups (unit preference, baseline yield, risk tolerance/context).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q5",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer naming two top factors (flexible phrasing allowed) with a short rationale.\n- Ask EXACTLY 3 follow-ups (trade-offs, ranking, context such as market vs agronomy).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q6",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer as a planting window (e.g., \"early Oct–mid Oct\").\n- Ask EXACTLY 3 follow-up questions (specific dates used, inter-annual variability, labor/equipment constraints).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q7",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer as the usual onset month/week of short rains (e.g., \"early October\").\n- Ask EXACTLY 3 follow-up questions (source of estimate, recent anomalies, altitude/microclimate effects).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q8",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer as the peak drought-risk month (e.g., \"February\").\n- Ask EXACTLY 3 follow-up questions (indicator used, last 3-year pattern, irrigation access).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q9",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer: \"Yes/No\" and, if Yes, a target month for the second crop.\n- Ask EXACTLY 3 follow-up questions (which crop, land prep time, rainfall reliability for second crop).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q10",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer as target grain moisture at harvest (percentage, e.g., 13–15%).\n- Ask EXACTLY 3 follow-up questions (measurement method, drying capacity, price/quality constraints).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q11",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer as the highest acceptable grain moisture at harvest to beat rains (percentage).\n- Ask EXACTLY 3 follow-up questions (post-harvest loss risk, drying cost, storage method).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q12",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer naming the top pest targeted by early maturity (e.g., fall armyworm, stem borer).\n- Ask EXACTLY 3 follow-up questions (peak month, damage level, current control methods).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q13",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer as the best price month for maize in the local market.\n- Ask EXACTLY 3 follow-up questions (market location, typical price spread, storage ability to wait).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q14",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer as a seed price premium acceptable for earlier maturity (either % or local currency per kg/bag).\n- Ask EXACTLY 3 follow-up questions (budget limit, expected benefit, payment timing/credit).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q15",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer for baseline yield (bags/acre or t/ha).\n- Ask EXACTLY 3 follow-up questions (unit preference, 3-year average vs last season, field-to-field variation).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q16",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer for the minimum acceptable yield if harvest is about two weeks earlier (bags/acre or t/ha).\n- Ask EXACTLY 3 follow-up questions (risk tolerance, price assumption, labor constraints).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q17",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer for target plant population (plants/acre or plants/ha).\n- Ask EXACTLY 3 follow-up questions (row spacing, seed rate, thinning/gap-filling practice).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q18",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer for farm altitude (meters above sea level).\n- Ask EXACTLY 3 follow-up questions (GPS/source, temperature pattern, variety suitability range).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q19",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer: \"Yes/No\" for irrigation during establishment; if Yes, include brief method/capacity.\n- Ask EXACTLY 3 follow-up questions (water source reliability, costs, scheduling).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    },
+    {
+      "nodeId": "Q20",
+      "prompt": "You are a well-known English survey expert. Read the Question and the Answer.\n\nTask:\n- Briefly analyze weaknesses in the answer.\n- Provide a strong expected answer: willingness to trial an earlier variety next season (Yes/No) and a small plot size (e.g., 0.1 acre).\n- Ask EXACTLY 3 follow-up questions (seed access, support needed, evaluation criteria).\n- Score 1–100 (integer).\n\nScoring rule: Judge ONLY content relevance/completeness/accuracy. Do NOT penalize style or formatting.\n\nQuestion: {{QUESTION}}\nAnswer: {{ANSWER}}\n"
+    }
+  ],
+  "graph": {
+    "startId": "Start",
+    "nodes": [
+      { "id": "Start", "type": "START", "title": "Start", "question": "Start", "nextId": "Q1" },
+
+      { "id": "Q1", "type": "AI", "title": "Early Maturity (Days)",
+        "question": "What do you consider an early-maturing maize variety? Please answer in days to maturity.", "nextId": "Q2" },
+      { "id": "Q2", "type": "AI", "title": "Current Variety DTM",
+        "question": "In most seasons, how many days does your current maize variety take from planting to harvest?", "nextId": "Q3" },
+      { "id": "Q3", "type": "AI", "title": "Short Rains Deadline",
+        "question": "During the short rains in your area, by which calendar month would you need to harvest to consider it early?", "nextId": "Q4" },
+      { "id": "Q4", "type": "AI", "title": "Yield Trade-off",
+        "question": "What maximum yield loss would you accept to harvest earlier—percentage or bags per acre?", "nextId": "Q5" },
+      { "id": "Q5", "type": "AI", "title": "Top Factors",
+        "question": "When choosing an early-maturing variety, which two factors matter most? (e.g., drought escape, pest escape, double-cropping, market timing)", "nextId": "Q6" },
+
+      { "id": "Q6", "type": "AI", "title": "Planting Window (Short Rains)",
+        "question": "What is your typical planting window for the short rains? Please give calendar dates or weeks.", "nextId": "Q7" },
+      { "id": "Q7", "type": "AI", "title": "Onset of Short Rains",
+        "question": "In your area, when do the short rains usually begin?", "nextId": "Q8" },
+      { "id": "Q8", "type": "AI", "title": "Peak Drought Risk",
+        "question": "By which month does drought risk usually peak during your season?", "nextId": "Q9" },
+      { "id": "Q9", "type": "AI", "title": "Second Crop Feasibility",
+        "question": "Would earlier harvest enable a second crop? If yes, when would you plant it?", "nextId": "Q10" },
+      { "id": "Q10", "type": "AI", "title": "Target Moisture",
+        "question": "At harvest, what grain moisture (%) do you target?", "nextId": "Q11" },
+      { "id": "Q11", "type": "AI", "title": "Highest Acceptable Moisture",
+        "question": "What is the highest grain moisture you would accept at harvest to beat the rains?", "nextId": "Q12" },
+      { "id": "Q12", "type": "AI", "title": "Key Pest to Escape",
+        "question": "Which pest do you most need to escape with early maturity?", "nextId": "Q13" },
+      { "id": "Q13", "type": "AI", "title": "Best Price Month",
+        "question": "Which month gives the best maize price in your market?", "nextId": "Q14" },
+      { "id": "Q14", "type": "AI", "title": "Seed Price Premium",
+        "question": "What maximum seed price premium would you accept for a reliably earlier variety?", "nextId": "Q15" },
+      { "id": "Q15", "type": "AI", "title": "Baseline Yield",
+        "question": "In a typical season, what's your baseline yield (bags/acre or t/ha)?", "nextId": "Q16" },
+      { "id": "Q16", "type": "AI", "title": "Minimum Yield if Earlier",
+        "question": "What is the minimum acceptable yield if harvest is about two weeks earlier?", "nextId": "Q17" },
+      { "id": "Q17", "type": "AI", "title": "Plant Population",
+        "question": "What target plant population do you use (plants/acre or plants/ha)?", "nextId": "Q18" },
+      { "id": "Q18", "type": "AI", "title": "Altitude",
+        "question": "What is your farm altitude (meters above sea level)?", "nextId": "Q19" },
+      { "id": "Q19", "type": "AI", "title": "Irrigation Access",
+        "question": "Do you have any irrigation during establishment?", "nextId": "Q20" },
+      { "id": "Q20", "type": "AI", "title": "Trial Willingness",
+        "question": "Would you trial an earlier variety on a small plot next season?", "nextId": "Review" },
+
+      { "id": "Review", "type": "REVIEW", "title": "Review", "question": "", "nextId": "Done" },
+      { "id": "Done", "type": "DONE", "title": "Done", "question": "" }
+    ]
+  }
+}

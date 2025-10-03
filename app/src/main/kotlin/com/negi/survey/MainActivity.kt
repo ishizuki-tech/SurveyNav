@@ -129,14 +129,14 @@ fun AppNav() {
         // Remember SLM model instance
         val slmModel = remember(modelFile.absolutePath) {
             Model(
-                name = "Gemma-3-1B-it",
+                name = "gemma-3n-E4B-it",
                 taskPath = modelFile.absolutePath,
                 config = mapOf(
+                    ConfigKey.ACCELERATOR to Accelerator.GPU.label,
                     ConfigKey.MAX_TOKENS to 2048,
-                    ConfigKey.TOP_K to 40,
-                    ConfigKey.TOP_P to 0.9f,
-                    ConfigKey.TEMPERATURE to 0.7f,
-                    ConfigKey.ACCELERATOR to Accelerator.GPU.label
+                    ConfigKey.TOP_K to 1,
+                    ConfigKey.TOP_P to 0.0f,
+                    ConfigKey.TEMPERATURE to 0.0f
                 )
             )
         }

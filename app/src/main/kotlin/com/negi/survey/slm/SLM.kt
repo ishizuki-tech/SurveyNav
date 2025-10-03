@@ -71,7 +71,6 @@ data class LlmModelInstance(
     val engine: LlmInference,
     @Volatile var session: LlmInferenceSession,
     val state: AtomicReference<RunState> = AtomicReference(RunState.IDLE),
-//    val pendingCleanup: AtomicBoolean = AtomicBoolean(false)
 )
 
 /**
@@ -142,6 +141,7 @@ object SLM {
     }
 
     fun resetSession(model: Model): Boolean {
+
         val snap = synchronized(this) {
             val inst = model.instance ?: return false
             if (inst.state.get() != RunState.IDLE) return false
@@ -177,7 +177,6 @@ object SLM {
     fun cleanUp(model: Model, onDone: () -> Unit) {
         val inst = model.instance ?: return onDone()
         if (inst.state.get() != RunState.IDLE) {
-            //inst.pendingCleanup.set(true)
             inst.session.cancelGenerateResponseAsync()
             return onDone()
         }
@@ -208,7 +207,10 @@ object SLM {
 
         Log.d(TAG, "runInference Called with model='${model.name}'\ninput='${input}' input.length=${input.length} ")
 
-        cleanUpListeners[keyOf(model)] = onClean
+        cleanUpListeners[keyOf(model)] = {
+            inst.state.set(RunState.IDLE)
+            onClean
+        }
 
         val text = input.trim()
 
@@ -218,15 +220,15 @@ object SLM {
 
         val buffer = StringBuilder()
         inst.session.generateResponseAsync { partial, done ->
-            if (!done) {
-                if (partial.isNotEmpty()) listener(partial, false)
+            if (partial.isNotEmpty()) {
                 buffer.append(partial)
             }
+            if (!done) {
+                listener(partial, false)
+            }
             else {
-                buffer.append(partial)
                 Log.d(TAG, "buffer.length=${buffer.length}\nrunInference buffer=${buffer}")
-                listener(buffer.append(partial).toString(), true)
-                inst.state.set(RunState.IDLE)
+                listener(buffer.toString(), true)
                 cleanUpListeners.remove(keyOf(model))?.invoke()
             }
         }

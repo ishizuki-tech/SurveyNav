@@ -38,7 +38,7 @@ class AiViewModelInstrumentationTest {
 
     companion object {
         private const val TAG = "AiVmInstrTest"
-        private const val TIMEOUT_SEC = 180L
+        private const val TIMEOUT_SEC = 60L
         private lateinit var model: Model
         private val initialized = AtomicBoolean(false)
 
@@ -60,7 +60,7 @@ class AiViewModelInstrumentationTest {
                     taskPath = modelRule.internalModel.absolutePath,
                     config = mapOf(
                         ConfigKey.ACCELERATOR to Accelerator.GPU.label,
-                        ConfigKey.MAX_TOKENS to 512,
+                        ConfigKey.MAX_TOKENS to 4096,
                         ConfigKey.TOP_K to 40,
                         ConfigKey.TOP_P to 0.9f,
                         ConfigKey.TEMPERATURE to 0.7f
@@ -138,6 +138,8 @@ class AiViewModelInstrumentationTest {
 
             // 4) 検証
             require(vm.stream.value.isNotEmpty()) { "stream was empty" }
+
+
             val raw = vm.raw.value ?: error("raw was null (error=${vm.error.value})")
             vm.score.value?.let { require(it in 0..100) { "score out of range: $it" } }
             if (vm.followupQuestion.value != null) {
