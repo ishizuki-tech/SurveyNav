@@ -91,7 +91,7 @@ class SlmDirectRepositoryInstrumentationTest {
 
         // あれば設定検証（必須ではないが、資産破損を早期検知）
         runCatching {
-            config = SurveyConfigLoader.fromAssets(appCtx, "survey_config.json").also {
+            config = SurveyConfigLoader.fromAssets(appCtx, "survey_config1.json").also {
                 val issues = it.validate()
                 assertTrue("SurveyConfig invalid:\n- " + issues.joinToString("\n- "), issues.isEmpty())
             }
@@ -234,7 +234,6 @@ class SlmDirectRepositoryInstrumentationTest {
             // R1：最初のチャンクで打ち切り（collector 側キャンセル）→ awaitClose が走る
             val t1Start = SystemClock.elapsedRealtime()
             val first1 = repo.request("R1: keep it short").first()
-
             val idle = waitUntil(IDLE_WAIT_MS) {
                 !SLM.isBusy(model)
             }

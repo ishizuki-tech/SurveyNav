@@ -9,7 +9,7 @@ plugins {
 }
 
 android {
-    // ---- load props once & helpers ----
+    // ---- Load local.properties once & tiny helpers ----
     val localProps = Properties().apply {
         val f = rootProject.file("local.properties")
         if (f.exists()) f.inputStream().use { load(it) }
@@ -22,7 +22,7 @@ android {
             ?: default
     fun quote(v: String) = "\"" + v.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
-    // ===== アプリIDを一元化（local.properties で appId を上書き可）=====
+    // ===== Single source of truth for appId (override via local.properties: appId=...) =====
     val appId = prop("appId", "com.negi.survey")
 
     namespace = appId
@@ -35,21 +35,29 @@ android {
         versionCode = 1
         versionName = "1.0"
 
+        // Use AndroidX Test Runner (required for Orchestrator)
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        // ★ Android 14+ 端末での androidTest 実行安定化
+
+        // Strongly recommended when using Orchestrator on Android 14+:
+        // - clearPackageData: isolates app state between test invocations
+        // - useTestStorageService: uses scoped test storage instead of legacy external storage
         testInstrumentationRunnerArguments["clearPackageData"] = "true"
-        testInstrumentationRunnerArguments["useTestStorageService"] = "true" // ★ 追加
+        testInstrumentationRunnerArguments["useTestStorageService"] = "true"
     }
 
-    // androidTest は常に debug 対象で実行（applicationId を揃える）
+    // Always run androidTest against the debug build (same applicationId)
     testBuildType = "debug"
 
-    // ★ Orchestrator 有効化（依存も必ず追加すること！）
     testOptions {
-        //execution = "ANDROIDX_TEST_ORCHESTRATOR"
-        execution= "HOST"
+        // ✅ Enable Android Test Orchestrator (each test runs in its own Instrumentation instance)
+        //    This drastically reduces flakiness caused by shared state between tests.
+        execution = "ANDROIDX_TEST_ORCHESTRATOR"
+
+        // Optional but helps reduce UI flakiness during Espresso/UI tests
         animationsDisabled = true
-        // unitTests.isIncludeAndroidResources = true // ←(必要なら)
+
+        // If you need resources in local unit tests, uncomment:
+        // unitTests.isIncludeAndroidResources = true
     }
 
     buildFeatures {
@@ -65,9 +73,7 @@ android {
 
     buildTypes {
         debug {
-            // ★ applicationIdSuffix は付けない（MediaStore の OWNER_PACKAGE_NAME 再利用のため）
-            // applicationIdSuffix = ""
-
+            // NOTE: Do not use applicationIdSuffix; keep a stable package for MediaStore ownership.
             buildConfigField("String", "GH_OWNER",       quote(prop("gh.owner")))
             buildConfigField("String", "GH_REPO",        quote(prop("gh.repo")))
             buildConfigField("String", "GH_BRANCH",      quote(prop("gh.branch", "main")))
@@ -76,8 +82,6 @@ android {
             buildConfigField("String", "HF_TOKEN",       quote(prop("HF_TOKEN")))
         }
         release {
-            // 同一 appId を維持（suffix 禁止）
-            // applicationIdSuffix = ""
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -89,11 +93,12 @@ android {
             buildConfigField("String", "GH_PATH_PREFIX", quote(prop("gh.pathPrefix", "exports")))
             buildConfigField("String", "GH_TOKEN",       quote(prop("gh.token")))
             buildConfigField("String", "HF_TOKEN",       quote(prop("HF_TOKEN")))
+            // Use debug signing for convenience in CI/dev
             signingConfig = signingConfigs.getByName("debug")
         }
     }
 
-    // META-INF の重複を幅広く除外（OkHttp/Coroutines/Media3/MediaPipe 混在時の衝突回避）
+    // Broad META-INF excludes to avoid conflicts among OkHttp/Coroutines/Media3/MediaPipe, etc.
     packaging {
         resources {
             excludes += setOf(
@@ -165,16 +170,17 @@ dependencies {
     // Accompanist
     implementation(libs.accompanist.navigation.animation)
 
-    // SAF（androidTest で DocumentFile を使う）
+    // SAF (androidTest uses DocumentFile)
     androidTestImplementation(libs.androidx.documentfile)
 
-    // Test
+    // ===== Test libs =====
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(kotlin("test"))
 
-    androidTestImplementation(libs.androidx.junit)           // androidx.test.ext:junit
+    // AndroidX Test
+    androidTestImplementation(libs.androidx.junit)            // androidx.test.ext:junit
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.ui.test.junit4)
     androidTestImplementation(libs.androidx.work.testing)
@@ -182,5 +188,12 @@ dependencies {
     androidTestImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.mockito.android)
 
-    androidTestUtil(libs.androidx.test.orchestrator) // 例: 1.5.1
+    // ✅ Orchestrator runner dependency (explicit)
+    // Some setups get it transitively, but declare explicitly to avoid surprises.
+    // If you have a version catalog alias, prefer that; otherwise use a literal coordinate.
+    androidTestImplementation(libs.androidx.test.runner)
+    // androidTestImplementation("androidx.test:runner:1.5.2") // ← fallback if no alias
+
+    // ✅ Orchestrator itself (required when execution = ANDROIDX_TEST_ORCHESTRATOR)
+    androidTestUtil(libs.androidx.test.orchestrator) // e.g., 1.5.1
 }

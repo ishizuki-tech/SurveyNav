@@ -12,7 +12,6 @@ import android.util.Log
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 // Hardware accelerator options for inference (CPU or GPU)
@@ -113,7 +112,9 @@ object SLM {
             else -> LlmInference.Backend.GPU
         }
 
-        val baseOpts = LlmInference.LlmInferenceOptions.builder().setModelPath(model.getPath()).setMaxTokens(maxTokens)
+        val baseOpts = LlmInference.LlmInferenceOptions.builder()
+            .setModelPath(model.getPath())
+            .setMaxTokens(maxTokens)
 
         val engine = try {
             LlmInference.createFromOptions(context, baseOpts.setPreferredBackend(backend).build())
@@ -121,7 +122,10 @@ object SLM {
             if (backend == LlmInference.Backend.GPU) {
                 Log.w(TAG, "GPU init failed. Falling back to CPU.")
                 try {
-                    LlmInference.createFromOptions(context, baseOpts.setPreferredBackend(LlmInference.Backend.CPU).build())
+                    LlmInference.createFromOptions(
+                        context,
+                        baseOpts.setPreferredBackend(LlmInference.Backend.CPU).build()
+                    )
                 } catch (e2: Exception) {
                     onDone(cleanError(e2.message)); return
                 }
@@ -141,7 +145,6 @@ object SLM {
     }
 
     fun resetSession(model: Model): Boolean {
-
         val snap = synchronized(this) {
             val inst = model.instance ?: return false
             if (inst.state.get() != RunState.IDLE) return false
@@ -176,12 +179,17 @@ object SLM {
     @Synchronized
     fun cleanUp(model: Model, onDone: () -> Unit) {
         val inst = model.instance ?: return onDone()
+
+        // If busy, force cancel and synthesize onClean to unblock any waiters.
         if (inst.state.get() != RunState.IDLE) {
             inst.session.cancelGenerateResponseAsync()
-            return onDone()
+            inst.state.set(RunState.IDLE)
+            cleanUpListeners.remove(keyOf(model))?.invoke()
+        } else {
+            // Idle: just remove any pending listener.
+            cleanUpListeners.remove(keyOf(model))?.invoke()
         }
 
-        cleanUpListeners.remove(keyOf(model))?.invoke()
         model.instance = null
         tryCloseQuietly(inst.session)
         safeClose(inst.engine)
@@ -190,14 +198,22 @@ object SLM {
 
     @Synchronized
     fun cancel(model: Model) {
-        model.instance?.takeIf { it.state.compareAndSet(RunState.RUNNING, RunState.CANCELLING) }?.apply {
-            session.cancelGenerateResponseAsync()
+        val inst = model.instance ?: return
+        if (inst.state.get() != RunState.IDLE) {
+            inst.state.set(RunState.CANCELLING)
+            inst.session.cancelGenerateResponseAsync()
+            inst.state.set(RunState.IDLE)
+            // Synthesize onClean so higher layers always see a cleanup after cancel.
+            cleanUpListeners.remove(keyOf(model))?.invoke()
         }
-        model.instance?.state?.set(RunState.IDLE)
     }
 
-    fun runInference(model: Model, input: String, listener: ResultListener, onClean: CleanUpListener) {
-
+    fun runInference(
+        model: Model,
+        input: String,
+        listener: ResultListener,
+        onClean: CleanUpListener
+    ) {
         val inst = model.instance ?: return listener("Model not initialized.", true)
 
         if (!inst.state.compareAndSet(RunState.IDLE, RunState.RUNNING)) {
@@ -205,39 +221,46 @@ object SLM {
             inst.state.compareAndSet(RunState.IDLE, RunState.RUNNING)
         }
 
-        Log.d(TAG, "runInference Called with model='${model.name}'\ninput='${input}' input.length=${input.length} ")
+        Log.d(TAG, "runInference Called with model='${model.name}'\ninput.length=${input.length}")
 
         cleanUpListeners[keyOf(model)] = {
             inst.state.set(RunState.IDLE)
-            onClean
+            onClean()
         }
 
         val text = input.trim()
-
         if (text.isNotEmpty()) {
             inst.session.addQueryChunk(text)
         }
 
-        val buffer = StringBuilder()
         inst.session.generateResponseAsync { partial, done ->
-            if (partial.isNotEmpty()) {
-                buffer.append(partial)
-            }
+            val preview =
+                if (partial.length > 256) partial.take(128) + " … " + partial.takeLast(64) else partial
+            Log.d(TAG, "partial[len=${partial.length}, done=$done]: $preview")
+
             if (!done) {
                 listener(partial, false)
-            }
-            else {
-                Log.d(TAG, "buffer.length=${buffer.length}\nrunInference buffer=${buffer}")
-                listener(buffer.toString(), true)
+            } else {
+                listener(partial, true)
                 cleanUpListeners.remove(keyOf(model))?.invoke()
             }
         }
     }
 
-    private fun buildSessionFromModel(engine: LlmInference, topK: Int, topP: Float, temp: Float): LlmInferenceSession =
-        LlmInferenceSession.createFromOptions(engine,
+    private fun buildSessionFromModel(
+        engine: LlmInference,
+        topK: Int,
+        topP: Float,
+        temp: Float
+    ): LlmInferenceSession =
+        LlmInferenceSession.createFromOptions(
+            engine,
             LlmInferenceSession.LlmInferenceSessionOptions.builder()
-                .setTopK(topK).setTopP(topP).setTemperature(temp).build())
+                .setTopK(topK)
+                .setTopP(topP)
+                .setTemperature(temp)
+                .build()
+        )
 
     private fun sanitizeTopK(k: Int) = k.coerceAtLeast(1)
     private fun sanitizeTopP(p: Float) = p.takeIf { it in 0f..1f } ?: DEFAULT_TOP_P
@@ -245,12 +268,14 @@ object SLM {
 
     private fun keyOf(model: Model) = "${model.name}#${System.identityHashCode(model)}"
 
-    private fun cleanError(msg: String?) = msg?.replace("INTERNAL:", "")?.replace("\\s+".toRegex(), " ")?.trim() ?: "Unknown error"
+    private fun cleanError(msg: String?) =
+        msg?.replace("INTERNAL:", "")?.replace("\\s+".toRegex(), " ")?.trim() ?: "Unknown error"
 
     private fun tryCloseQuietly(session: LlmInferenceSession?) = runCatching {
-        session?.cancelGenerateResponseAsync();
+        session?.cancelGenerateResponseAsync()
         session?.close()
     }
+
     private fun safeClose(engine: LlmInference?) = runCatching { engine?.close() }
 
     private data class Snap(

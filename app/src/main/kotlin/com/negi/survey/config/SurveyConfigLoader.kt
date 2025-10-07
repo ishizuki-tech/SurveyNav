@@ -3,7 +3,6 @@ package com.negi.survey.config
 import android.content.Context
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.nio.charset.Charset
@@ -192,7 +191,7 @@ object SurveyConfigLoader {
      */
     fun fromAssets(
         context: Context,
-        fileName: String = "survey_config.json",
+        fileName: String = "survey_config1.json",
         charset: Charset = Charsets.UTF_8
     ): SurveyConfig = try {
         context.assets.open(fileName).bufferedReader(charset).use { reader ->

@@ -168,7 +168,7 @@ fun AppNav() {
 
             // Load static survey configuration from assets
             val config = remember(appContext) {
-                SurveyConfigLoader.fromAssets(appContext, "survey_config.json")
+                SurveyConfigLoader.fromAssets(appContext, "survey_config1.json")
             }
 
             // Setup direct repository for SLM communication

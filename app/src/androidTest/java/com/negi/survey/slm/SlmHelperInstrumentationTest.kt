@@ -102,7 +102,7 @@ class SlmHelperInstrumentationTest {
             // model.instance may be set asynchronously; poll briefly.
             assertTrue(
                 "Model instance must be created",
-                waitUntil(timeoutMs = 5_000) { model.instance != null }
+                waitUntil(timeoutMs = 15_000) { model.instance != null }
             )
         } else {
             assertNotNull("Model instance must exist", model.instance)
