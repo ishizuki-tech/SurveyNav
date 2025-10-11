@@ -1,0 +1,39 @@
+{
+  "answers": {
+    "Q1": {
+      "question": "Can you specify yield loss as bags per acre or percentage?",
+      "answer": "I lost 30% of my yield per acre"
+    },
+    "Q2": {
+      "question": "Is this yield loss expressed as bags per acre or percentage of total yield?",
+      "answer": "I will give up 5%"
+    },
+    "Q3": {
+      "question": "Are you referring to maize streak virus symptoms at tasseling?",
+      "answer": "Yes"
+    },
+    "Q4": {
+      "question": "What would you expect from a new maize variety to replace the one you currently grow? Please be as detailed as possible (e.g., DTM, FAW tolerance, drought stage tolerance, typical yield).",
+      "answer": ""
+    },
+    "Q5": {
+      "question": "In a bad year, what is the smallest harvest you would accept and still plant this maize again next season? (Percent of usual harvest or bags per acre.)",
+      "answer": ""
+    },
+    "Q6": {
+      "question": "When in the season is drought most devastating for your crop? What is the most difficult drought moment? (e.g., pre-tassel, tasseling/silking, grain fill, pre-harvest.)",
+      "answer": ""
+    }
+  },
+  "followups": {
+    "Q1": [
+      { "question": "Can you specify yield loss as bags per acre or percentage?", "answer": "" }
+    ],
+    "Q2": [
+      { "question": "Is this yield loss expressed as bags per acre or percentage of total yield?", "answer": "" }
+    ],
+    "Q3": [
+      { "question": "Are you referring to maize streak virus symptoms at tasseling?", "answer": "Yes" }
+    ]
+  }
+}
