@@ -7,6 +7,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
 import com.negi.survey.ModelAssetRule
+import com.negi.survey.config.SurveyConfig
+import com.negi.survey.config.SurveyConfigLoader
 import com.negi.survey.slm.Accelerator
 import com.negi.survey.slm.ConfigKey
 import com.negi.survey.slm.Model
@@ -35,6 +37,7 @@ class AiViewModelInstrumentationTest {
     private lateinit var appCtx: Context
     private lateinit var repo: SlmDirectRepository
     private lateinit var vm: AiViewModel
+    private lateinit var config: SurveyConfig
 
     companion object {
         private const val TAG = "AiVmInstrTest"
@@ -50,10 +53,13 @@ class AiViewModelInstrumentationTest {
 
     @Before
     fun setUp() {
+        appCtx = InstrumentationRegistry.getInstrumentation().targetContext
+        config = SurveyConfigLoader.fromAssets(appCtx, "survey_config1.yaml")
+        val issues = config.validate()
+        assertTrue("SurveyConfig invalid:\n- " + issues.joinToString("\n- "), issues.isEmpty())
         runBlocking {
             appCtx = InstrumentationRegistry.getInstrumentation().targetContext
             requireNotNull(appCtx) { "targetContext is null" }
-
             if (initialized.compareAndSet(false, true)) {
                 model = Model(
                     name = "gemma3-local-test",
@@ -66,7 +72,6 @@ class AiViewModelInstrumentationTest {
                         ConfigKey.TEMPERATURE to 0.7f
                     )
                 )
-
                 val latch = CountDownLatch(1)
                 var initError: String? = null
                 SLM.initialize(appCtx, model) { err ->
@@ -82,7 +87,7 @@ class AiViewModelInstrumentationTest {
                 assertNotNull("Model instance must exist", model.instance)
             }
 
-            repo = SlmDirectRepository(appCtx, model)
+            repo = SlmDirectRepository(model,config)
             vm = AiViewModel(repo, timeout_ms = TIMEOUT_SEC * 1000)
 
             runCatching { assertFalse("busy should be false at test start", SLM.isBusy(model)) }

@@ -104,14 +104,14 @@ object Logx {
     private fun chunk(priority: Int, tag: String, text: String) {
         val t = text.normalize()
         if (t.length <= MAX_CHUNK) {
-            Log.println(priority, tag, t)
+            Log.println(priority, tag, "$t  ")
             return
         }
         var i = 0
         val n = t.length
         while (i < n) {
             val end = min(n, i + MAX_CHUNK)
-            Log.println(priority, tag, t.substring(i, end))
+            Log.println(priority, tag, "${t.substring(i, end)}  ")
             i = end
         }
     }

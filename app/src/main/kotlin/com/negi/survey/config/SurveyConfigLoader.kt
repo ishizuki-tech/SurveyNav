@@ -1,43 +1,30 @@
 package com.negi.survey.config
 
 import android.content.Context
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import com.charleskorn.kaml.Yaml
+import com.charleskorn.kaml.YamlConfiguration
+import com.negi.survey.vm.Node
 import java.io.File
 import java.nio.charset.Charset
-
-/**
- * JSON schema (example)
- * {
- *   "prompts": [ { "nodeId": "...", "prompt": "..." }, ... ],
- *   "graph": { "startId": "...", "nodes": [ ... ] }
- * }
- *
- * Design notes for ViewModel / tests:
- * - Keep nested types (SurveyConfig.Prompt / SurveyConfig.Graph) for source compatibility.
- * - Provide typealiases (PromptEntry / GraphConfig) for flexible call sites.
- */
 
 @Serializable
 data class SurveyConfig(
     val prompts: List<Prompt> = emptyList(),
-    val graph: Graph
+    val graph: Graph,
+    val slm: SlmMeta = SlmMeta() // 常に非nullで扱えるよう既定値
 ) {
-    /**
-     * A single prompt mapped to a specific node.
-     * Keeping this as a nested type to avoid import churn in callers.
-     */
+    // ------------ prompts ------------
     @Serializable
     data class Prompt(
         val nodeId: String,
         val prompt: String
     )
 
-    /**
-     * Graph entry point and node list.
-     * `startId` must correspond to an existing node id in `nodes`.
-     */
+    // ------------ graph ------------
     @Serializable
     data class Graph(
         val startId: String,
@@ -45,58 +32,58 @@ data class SurveyConfig(
     )
 
     /**
-     * Validate structural consistency of the configuration.
-     *
-     * Checks performed:
-     * - `startId` is not blank and exists in `nodes`.
-     * - Node id duplication.
-     * - `prompts` referencing unknown node ids.
-     * - Multiple prompts for the same node id.
-     * - `nextId` (if present) references an existing node id.
-     * - AI node with empty `question` (common authoring mistake).
-     *
-     * Returns:
-     * - A list of human-readable issue messages; empty list means "valid".
+     * SLM runtime parameters + system-prompt metadata (all optional).
+     * すべての snake_case に SerialName を明示してkamlの名前解決を安定化
      */
+    @Serializable
+    data class SlmMeta(
+        // --- runtime params (optional)
+        @SerialName("accelerator") val accelerator: String? = null, // "CPU"/"GPU"
+        @SerialName("max_tokens")  val maxTokens: Int? = null,
+        @SerialName("top_k")       val topK: Int? = null,
+        @SerialName("top_p")       val topP: Double? = null,
+        @SerialName("temperature") val temperature: Double? = null,
+
+        // --- meta/system prompt pieces (optional)
+        @SerialName("user_turn_prefix")      val user_turn_prefix: String? = null,
+        @SerialName("model_turn_prefix")     val model_turn_prefix: String? = null,
+        @SerialName("turn_end")              val turn_end: String? = null,
+        @SerialName("empty_json_instruction")val empty_json_instruction: String? = null,
+        @SerialName("preamble")              val preamble: String? = null,
+        @SerialName("key_contract")          val key_contract: String? = null,
+        @SerialName("length_budget")         val length_budget: String? = null,
+        @SerialName("scoring_rule")          val scoring_rule: String? = null,
+        @SerialName("strict_output")         val strict_output: String? = null
+    )
+
+    /** 構造検証 */
     fun validate(): List<String> {
         val issues = mutableListOf<String>()
 
-        // Fast path: build id set once
         val ids = graph.nodes.map { it.id }
         val idSet = ids.toSet()
 
-        // startId sanity
         if (graph.startId.isBlank()) {
             issues += "graph.startId is blank"
         } else if (graph.startId !in idSet) {
             issues += "graph.startId='${graph.startId}' not found in node ids: ${idSet.joinToString(",")}"
         }
 
-        // Duplicate node ids
         val duplicateIds = ids.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
-        if (duplicateIds.isNotEmpty()) {
-            issues += "duplicate node ids: ${duplicateIds.joinToString(",")}"
-        }
+        if (duplicateIds.isNotEmpty()) issues += "duplicate node ids: ${duplicateIds.joinToString(",")}"
 
-        // Prompts → unknown nodes
         val unknownPromptTargets = prompts.asSequence()
-            .map { it.nodeId }
-            .filter { it !in idSet }
-            .distinct()
-            .toList()
+            .map { it.nodeId }.filter { it !in idSet }.distinct().toList()
         if (unknownPromptTargets.isNotEmpty()) {
             issues += "prompts contain unknown nodeIds: ${unknownPromptTargets.joinToString(",")}"
         }
 
-        // Multiple prompts for a single node id
         val duplicatePromptTargets = prompts.groupingBy { it.nodeId }.eachCount()
-            .filterValues { it > 1 }
-            .keys
+            .filterValues { it > 1 }.keys
         if (duplicatePromptTargets.isNotEmpty()) {
             issues += "multiple prompts defined for nodeIds: ${duplicatePromptTargets.joinToString(",")}"
         }
 
-        // nextId existence check
         graph.nodes.forEach { node ->
             node.nextId?.takeIf { it.isNotBlank() }?.let { next ->
                 if (next !in idSet) {
@@ -105,33 +92,56 @@ data class SurveyConfig(
             }
         }
 
-        // AI nodes must present a non-empty question (helps authoring quality)
-        graph.nodes
-            .asSequence()
+        graph.nodes.asSequence()
             .filter { it.nodeType() == NodeType.AI && it.question.isBlank() }
             .forEach { issues += "AI node '${it.id}' has empty question" }
+
+        // SLM param sanity (optional)
+        slm.accelerator?.let { acc ->
+            val a = acc.trim().uppercase()
+            if (a != "CPU" && a != "GPU") issues += "slm.accelerator should be 'CPU' or 'GPU' (got '$acc')"
+        }
+        slm.maxTokens?.let { if (it <= 0) issues += "slm.max_tokens must be > 0 (got $it)" }
+        slm.topK?.let { if (it < 0) issues += "slm.top_k must be >= 0 (got $it)" }
+        slm.topP?.let { if (it !in 0.0..1.0) issues += "slm.top_p must be in [0.0,1.0] (got $it)" }
+        slm.temperature?.let { if (it < 0.0) issues += "slm.temperature must be >= 0.0 (got $it)" }
 
         return issues
     }
 
-    /**
-     * Export prompts as JSON Lines (one JSON object per line).
-     * This is convenient for training data or bulk processing pipelines.
-     */
-    fun toJsonl(): List<String> {
-        val json = Json { prettyPrint = false }
-        return prompts.map { json.encodeToString(it) }
+    fun toJsonl(): List<String> =
+        SurveyConfigLoader.jsonCompact.let { j -> prompts.map { j.encodeToString(Prompt.serializer(), it) } }
+
+    fun toJson(pretty: Boolean = true): String =
+        (if (pretty) SurveyConfigLoader.jsonPretty else SurveyConfigLoader.jsonCompact)
+            .encodeToString(serializer(), this)
+
+    fun toYaml(strict: Boolean = false): String =
+        SurveyConfigLoader.yaml(strict).encodeToString(serializer(), this)
+
+    /** SLMシステムプロンプト組み立て（非空のみ連結） */
+    fun composeSystemPrompt(): String {
+        fun String?.addTo(sb: StringBuilder) {
+            if (!this.isNullOrBlank()) {
+                if (sb.isNotEmpty()) sb.appendLine()
+                sb.append(this)
+            }
+        }
+        return buildString {
+            slm.preamble.addTo(this)
+            slm.key_contract.addTo(this)
+            slm.length_budget.addTo(this)
+            slm.scoring_rule.addTo(this)
+            slm.strict_output.addTo(this)
+            slm.empty_json_instruction.addTo(this)
+        }
     }
 }
 
-/** Backward-compatible aliases to help migration without noisy imports. */
+/** Backward-compatible aliases */
 typealias PromptEntry = SurveyConfig.Prompt
 typealias GraphConfig  = SurveyConfig.Graph
 
-/**
- * Node DTO used by serialization and graph evaluation.
- * `type` is kept as raw String for compatibility with external JSON writers.
- */
 @Serializable
 data class NodeDTO(
     val id: String,
@@ -141,22 +151,20 @@ data class NodeDTO(
     val options: List<String> = emptyList(),
     val nextId: String? = null
 ) {
-    /** Converts raw `type` string to a typed enum with safe fallback. */
     fun nodeType(): NodeType = NodeType.from(type)
+    fun toNode(): Node = Node(
+        id = id,
+        type = runCatching { com.negi.survey.vm.NodeType.valueOf(type.uppercase()) }.getOrElse { com.negi.survey.vm.NodeType.TEXT },
+        title = title,
+        question = question,
+        options = options,
+        nextId = nextId
+    )
 }
 
-/**
- * Node types aligned with the ViewModel side.
- * Include TEXT / SINGLE_CHOICE / MULTI_CHOICE and authoring-related markers.
- */
 enum class NodeType {
     START, TEXT, SINGLE_CHOICE, MULTI_CHOICE, AI, REVIEW, DONE, UNKNOWN;
-
     companion object {
-        /**
-         * Map a raw type string to enum value. Unknown strings are mapped to UNKNOWN.
-         * The mapping is case-insensitive and tolerant of whitespace.
-         */
         fun from(raw: String?): NodeType = when (raw?.trim()?.uppercase()) {
             "START"         -> START
             "TEXT"          -> TEXT
@@ -170,32 +178,39 @@ enum class NodeType {
     }
 }
 
-/**
- * Utilities to load SurveyConfig from assets, file, or raw JSON string.
- * Errors are wrapped as IllegalArgumentException with clear context for logging or UI surfacing.
- */
+enum class ConfigFormat { JSON, YAML, AUTO }
+
 object SurveyConfigLoader {
 
-    // Centralized JSON instance with consistent decoding behavior.
-    // - ignoreUnknownKeys: forward-compatible with new server fields
-    // - isLenient: tolerate minor formatting quirks
-    private val json = Json {
+    internal val jsonCompact: Json = Json {
         ignoreUnknownKeys = true
         prettyPrint = false
         isLenient = true
     }
+    internal val jsonPretty: Json = Json {
+        ignoreUnknownKeys = true
+        prettyPrint = true
+        isLenient = true
+    }
 
-    /**
-     * Load from Android assets. The default file name is "survey_config.json".
-     * Throws IllegalArgumentException with detailed cause on failure.
-     */
+    // strict=false かつ encodeDefaults=false（既定値は省略してOK）
+    internal fun yaml(strict: Boolean = false): Yaml =
+        Yaml(
+            configuration = YamlConfiguration(
+                encodeDefaults = false,
+                strictMode = strict   // デコード側は fromString で常に false を渡す
+            )
+        )
+
     fun fromAssets(
         context: Context,
-        fileName: String = "survey_config1.json",
-        charset: Charset = Charsets.UTF_8
+        fileName: String,
+        charset: Charset = Charsets.UTF_8,
+        format: ConfigFormat = ConfigFormat.AUTO
     ): SurveyConfig = try {
         context.assets.open(fileName).bufferedReader(charset).use { reader ->
-            fromString(reader.readText())
+            val text = reader.readText().normalize()
+            fromString(text, format = pickFormat(format, fileName, text))
         }
     } catch (ex: Exception) {
         throw IllegalArgumentException(
@@ -204,18 +219,16 @@ object SurveyConfigLoader {
         )
     }
 
-    /**
-     * Load from an absolute or app-internal file path.
-     * Validates file existence before reading to produce a clearer error message.
-     */
     fun fromFile(
         path: String,
-        charset: Charset = Charsets.UTF_8
+        charset: Charset = Charsets.UTF_8,
+        format: ConfigFormat = ConfigFormat.AUTO
     ): SurveyConfig = try {
         val file = File(path)
         require(file.exists()) { "Config file not found: $path" }
         file.bufferedReader(charset).use { reader ->
-            fromString(reader.readText())
+            val text = reader.readText().normalize()
+            fromString(text, format = pickFormat(format, file.name, text))
         }
     } catch (ex: Exception) {
         throw IllegalArgumentException(
@@ -224,21 +237,63 @@ object SurveyConfigLoader {
         )
     }
 
-    /**
-     * Parse from raw JSON string into a SurveyConfig instance.
-     * Wraps serialization issues with a user-friendly message for logs/UI.
-     */
-    fun fromString(jsonText: String): SurveyConfig = try {
-        json.decodeFromString(SurveyConfig.serializer(), jsonText)
+    fun fromString(
+        text: String,
+        format: ConfigFormat = ConfigFormat.AUTO,
+        fileNameHint: String? = null
+    ): SurveyConfig = try {
+        val sanitized = text.normalize()
+        val chosen = pickFormat(format, fileNameHint, sanitized)
+        when (chosen) {
+            ConfigFormat.JSON -> jsonCompact.decodeFromString(SurveyConfig.serializer(), sanitized)
+            ConfigFormat.YAML -> yaml(strict = false).decodeFromString(SurveyConfig.serializer(), sanitized)
+            ConfigFormat.AUTO -> error("AUTO should have been resolved; this is a bug.")
+        }
     } catch (ex: SerializationException) {
+        val preview = text.safePreview()
         throw IllegalArgumentException(
-            "JSON parsing error while parsing SurveyConfig: ${ex.message}",
+            "Parsing error (format=${format.name}). First 200 chars: $preview :: ${ex.message}",
             ex
         )
     } catch (ex: Exception) {
+        val preview = text.safePreview()
         throw IllegalArgumentException(
-            "Unexpected error while parsing SurveyConfig: ${ex.message}",
+            "Unexpected error while parsing SurveyConfig. First 200 chars: $preview :: ${ex.message}",
             ex
         )
     }
+
+    private fun pickFormat(
+        desired: ConfigFormat,
+        fileName: String? = null,
+        text: String? = null
+    ): ConfigFormat {
+        if (desired != ConfigFormat.AUTO) return desired
+        val lower = fileName?.lowercase().orEmpty()
+        if (lower.endsWith(".json")) return ConfigFormat.JSON
+        if (lower.endsWith(".yaml") || lower.endsWith(".yml")) return ConfigFormat.YAML
+        val sniff = text?.let(::sniffFormat)
+        return sniff ?: ConfigFormat.JSON
+    }
+
+    private fun sniffFormat(text: String): ConfigFormat {
+        val trimmed = text.trimStart('\uFEFF', ' ', '\n', '\r', '\t')
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) return ConfigFormat.JSON
+        val firstNonEmpty = trimmed.lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: ""
+        if (firstNonEmpty.startsWith("---")) return ConfigFormat.YAML
+        if (firstNonEmpty.startsWith("- ")) return ConfigFormat.YAML
+        if (":" in firstNonEmpty && !firstNonEmpty.startsWith("{")) return ConfigFormat.YAML
+        return ConfigFormat.JSON
+    }
+
+    private fun String.normalize(): String =
+        this.removePrefix("\uFEFF")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .trimEnd('\n')
+
+    private fun String.safePreview(max: Int = 200): String =
+        this.replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .let { if (it.length <= max) it else it.substring(0, max) + "…" }
 }

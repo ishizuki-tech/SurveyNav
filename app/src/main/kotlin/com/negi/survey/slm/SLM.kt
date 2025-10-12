@@ -41,7 +41,7 @@ enum class RunState { IDLE, RUNNING, CANCELLING }
  */
 data class Model(
     val name: String,
-    private val taskPath: String,
+    val taskPath: String,
     val config: Map<ConfigKey, Any> = emptyMap(),
     @Volatile var instance: LlmModelInstance? = null
 ) {

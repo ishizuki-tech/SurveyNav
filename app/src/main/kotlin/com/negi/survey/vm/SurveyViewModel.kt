@@ -71,7 +71,7 @@ sealed interface UiEvent {
 /**
  * Main ViewModel for managing survey state, answers, navigation, and follow-ups.
  */
-class SurveyViewModel(
+open class SurveyViewModel(
     val nav: NavBackStack<NavKey>,
     private val config: SurveyConfig,
 ) : ViewModel() {
@@ -79,16 +79,6 @@ class SurveyViewModel(
     // Graph configuration loaded from JSON
     private val graph: Map<String, Node>
     private val startId: String = config.graph.startId
-
-    // Converts DTO to internal node model
-    private fun NodeDTO.toNode(): Node = Node(
-        id = id,
-        type = runCatching { NodeType.valueOf(type.uppercase()) }.getOrElse { NodeType.TEXT },
-        title = title,
-        question = question,
-        options = options,
-        nextId = nextId
-    )
 
     // Gets a Node from ID or throws if missing
     private fun nodeOf(id: String): Node =
@@ -344,6 +334,9 @@ class SurveyViewModel(
     }
 
     // Initialize graph and set first node
+
+    // Converts DTO to internal node model
+
     init {
         graph = config.graph.nodes.associateBy { it.id }.mapValues { (_, dto) -> dto.toNode() }
         val start = nodeOf(startId)

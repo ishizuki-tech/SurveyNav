@@ -1,70 +1,119 @@
+// file: app/src/main/java/com/negi/survey/screens/AiScreen.kt
 package com.negi.survey.screens
 
+import android.annotation.SuppressLint
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.BottomAppBar
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.LocalTextStyle
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.negi.survey.slm.FollowupExtractor.extractScore
 import com.negi.survey.vm.AiViewModel
 import com.negi.survey.vm.SurveyViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlin.collections.ArrayDeque
 
-@OptIn(ExperimentalMaterial3Api::class)
+/* =============================================================================
+ * AI Evaluation Screen — Modern × Monotone × Chic
+ *
+ * Visual design:
+ *  - Monotone animated background (black → dark grays), zero chroma.
+ *  - Ultra-slim glass chat bubbles with neutral gradient fills and micro-tails.
+ *  - Subtle neutral edge (sweep gray rim), low alpha to avoid visual weight.
+ *  - Compact JSON bubble with neutral header and copy action.
+ *
+ * Architecture:
+ *  - Preserves existing VM contracts and behavior (AiViewModel / SurveyViewModel).
+ *  - Stateless composables except for local UI state (expand/collapse).
+ *  - No reliance on experimental APIs beyond Material3 annotations currently used.
+ *
+ * Performance:
+ *  - Single rememberInfiniteTransition per animated piece (cheap, GPU-friendly).
+ *  - Decorations via drawBehind; avoids extra composable layers.
+ *  - JSON selection only when expanded; saves layout/measure cost.
+ * =============================================================================
+ */
+
+/* ───────────────────────────────── App Bar ───────────────────────────────── */
+
+@Composable
+private fun CompactTopBar(
+    title: String,
+    height: Dp = 32.dp
+) {
+    val cs = MaterialTheme.colorScheme
+    val topBrush = Brush.horizontalGradient(
+        listOf(
+            cs.surface.copy(alpha = 0.96f),
+            Color(0xFF1A1A1A).copy(alpha = 0.75f)
+        )
+    )
+    Surface(color = Color.Transparent, tonalElevation = 0.dp) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(topBrush)
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .height(height)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                color = cs.onSurface
+            )
+        }
+    }
+}
+
+/* ───────────────────────────────── Screen ───────────────────────────────── */
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalSerializationApi::class)
 @Composable
 fun AiScreen(
     nodeId: String,
@@ -73,245 +122,605 @@ fun AiScreen(
     onNext: () -> Unit,
     onBack: () -> Unit
 ) {
-    // ----- helpers -----
     val keyboard = LocalSoftwareKeyboardController.current
-    val vScroll = rememberScrollState()
-    val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
 
-    // Rebuild subtree when nodeId changes to avoid state leakage
-    key(nodeId) {
+    // Survey state
+    val question by remember(vmSurvey, nodeId) {
+        vmSurvey.questions.map { it[nodeId].orEmpty() }
+    }.collectAsState(initial = vmSurvey.getQuestion(nodeId))
 
-        // ----- VM state -----
-        val question by remember(
-            vmSurvey,
-            nodeId
-        ) { vmSurvey.questions.map { it[nodeId].orEmpty() } }
-            .collectAsState(initial = vmSurvey.getQuestion(nodeId))
-        val answer by remember(vmSurvey, nodeId) { vmSurvey.answers.map { it[nodeId].orEmpty() } }
-            .collectAsState(initial = vmSurvey.getAnswer(nodeId))
+    // AI state
+    val loading by vmAI.loading.collectAsState()
+    val stream by vmAI.stream.collectAsState()
+    val raw by vmAI.raw.collectAsState()
+    val error by vmAI.error.collectAsState()
+    val followup by vmAI.followupQuestion.collectAsState()
 
-        val loading by vmAI.loading.collectAsState()
-        val score by vmAI.score.collectAsState()
-        val stream by vmAI.stream.collectAsState()
-        val raw by vmAI.raw.collectAsState()
-        val error by vmAI.error.collectAsState()
-        val followupQuestion by vmAI.followupQuestion.collectAsState()
+    // Chat list per node
+    val chat by remember(nodeId) { vmAI.chatFlow(nodeId) }.collectAsState()
 
-        // ----- effects -----
+    // Local state
+    var composer by remember(nodeId) { mutableStateOf(vmSurvey.getAnswer(nodeId)) }
+    val focusRequester = remember { FocusRequester() }
+    val scroll = rememberScrollState()
 
-        // Give focus & show keyboard on first appearance
-        LaunchedEffect(nodeId) {
-            focusRequester.requestFocus()
-            keyboard?.show()
-        }
-
-        // Snack on error
-        LaunchedEffect(error) { error?.let { snack.showSnackbar(it) } }
-
-        // When follow-up is produced (and finished), record & display it once
-        LaunchedEffect(followupQuestion, loading, nodeId) {
-            val q = followupQuestion
-            if (!loading && q != null) {
-                vmSurvey.addFollowupQuestion(nodeId, q)
-                vmSurvey.setQuestion(q, nodeId)
-            }
-        }
-
-        // Ensure AI states are cleared when leaving the screen
-        DisposableEffect(nodeId) {
-            onDispose { vmAI.resetStates() }
-        }
-
-        // Kick off evaluation
-        fun startEvaluation(curQuestion: String, curAnswer: String) {
-            if (curAnswer.isBlank() || loading) return
-            vmSurvey.answerLastFollowup(nodeId, curAnswer)
-            scope.launch {
-                vmAI.evaluateAsync(vmSurvey.getPrompt(nodeId, curQuestion, curAnswer))
-            }
-        }
-
-        // Typography for dense UI
-        val smallStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 14.sp)
-
-        Scaffold(
-            //containerColor = Color.Transparent,
-            topBar = {
-                TopAppBar(title = { Text("Question Eval. $nodeId", style = smallStyle) })
-            },
-            bottomBar = {
-                BottomAppBar(containerColor = Color.Transparent) {
-                    Button(
-                        onClick = {
-                            vmAI.resetStates()
-                            onBack()
-                        }
-                    ) { Text("Back", style = smallStyle) }
-
-                    Spacer(Modifier.weight(1f))
-
-                    Button(
-                        onClick = {
-                            focusRequester.freeFocus()
-                            keyboard?.hide()
-                            startEvaluation(question, answer)
-                        },
-                        enabled = answer.isNotBlank() && !loading
-                    ) {
-                        Text(if (score == null) "Submit" else "Retry", style = smallStyle)
-                    }
-
-                    Spacer(Modifier.weight(1f))
-
-                    OutlinedButton(
-                        onClick = {
-                            vmAI.resetStates()
-                            onNext()
-                        }
-                    ) { Text("Next", style = smallStyle) }
-                }
-            },
-            snackbarHost = { SnackbarHost(snack) }
-        ) { pad ->
-            CompositionLocalProvider(LocalTextStyle provides smallStyle) {
-                Column(
-                    Modifier
-                        .padding(pad)
-                        .padding(20.dp)
-                        .fillMaxSize()
-                        .verticalScroll(vScroll) // single vertical scroller for the whole screen
-                ) {
-                    // Read-only follow-up question (avoid accidental edits)
-                    OutlinedTextField(
-                        value = question,
-                        onValueChange = { /* readOnly */ },
-                        readOnly = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        textStyle = LocalTextStyle.current,
-                        label = { Text("Question", style = LocalTextStyle.current) },
-                    )
-
-                    // User answer
-                    OutlinedTextField(
-                        value = answer,
-                        onValueChange = { vmSurvey.setAnswer(it, nodeId) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(focusRequester),
-                        minLines = 5,
-                        textStyle = LocalTextStyle.current,
-                        label = { Text("Your answer", style = LocalTextStyle.current) },
-                    )
-
-                    Spacer(Modifier.height(16.dp))
-
-                    // Result area: JSON (pretty) or streaming text fallback
-                    if (!raw.isNullOrBlank()) {
-                        val json = remember {
-                            Json {
-                                prettyPrint = true
-                                prettyPrintIndent = " "
-                                ignoreUnknownKeys = true
-                            }
-                        }
-                        val pretty = remember(raw) { prettyOrRaw(json, raw!!) }
-                        JsonCard(pretty = pretty, score = score)
-                    } else {
-                        if (loading) {
-                            LinearProgressIndicator(Modifier.fillMaxWidth())
-                            Spacer(Modifier.height(8.dp))
-                            Text("Output From SLM.")
-                            Spacer(Modifier.height(6.dp))
-                            Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
-                                Column(Modifier.padding(12.dp)) {
-                                    Text(if (stream.isBlank()) "Waiting for response …" else stream)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    // Seed the first question and focus composer (IME kept open)
+    LaunchedEffect(nodeId, question) {
+        vmAI.chatEnsureSeedQuestion(nodeId, question)
+        focusRequester.requestFocus()
+        keyboard?.show()
     }
-}
+    // Keep composer text when returning to this screen
+    LaunchedEffect(nodeId) { composer = vmSurvey.getAnswer(nodeId) }
+    // Errors as snackbars
+    LaunchedEffect(error) { error?.let { snack.showSnackbar(it) } }
 
-/* -------------------------------- Helpers -------------------------------- */
-
-@Composable
-private fun JsonCard(
-    pretty: String,
-    score: Int?
-) {
-    // Horizontal scroll only (parent column already controls vertical scroll)
-    val hScroll = rememberScrollState()
-
-    Box(Modifier.fillMaxWidth()) {
-        Surface(
-            tonalElevation = 1.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
-                .padding(4.dp)
-                .horizontalScroll(hScroll)
-        ) {
-            SelectionContainer {
-                Column(Modifier.padding(8.dp)) {
-                    Text(
-                        text = pretty,
-                        fontFamily = FontFamily.Monospace,
-                        lineHeight = 18.sp
-                    )
-                    if (score != null) {
-                        Spacer(Modifier.height(6.dp))
-                        Text("Score: $score / 100")
-                    }
-                }
-            }
-        }
-
-        // Overlay a lightweight horizontal scrollbar when scrollable
-        val showBar by remember { derivedStateOf { hScroll.maxValue > 0 } }
-        if (showBar) {
-            HorizontalScrollbar(
-                scrollState = hScroll,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
+    // Maintain/update typing bubble during streaming
+    LaunchedEffect(loading, stream) {
+        if (loading) {
+            val txt = stream.ifBlank { "…" }
+            vmAI.chatUpsertTyping(
+                nodeId,
+                AiViewModel.ChatMsgVm(
+                    id = "typing-$nodeId",
+                    sender = AiViewModel.ChatSender.AI,
+                    text = txt,
+                    isTyping = true
+                )
             )
         }
     }
+
+    // Replace typing bubble with pretty JSON on final
+    LaunchedEffect(raw, loading) {
+        if (!raw.isNullOrBlank() && !loading) {
+            val jsonPretty = Json { prettyPrint = true; prettyPrintIndent = " "; ignoreUnknownKeys = true }
+            val pretty = prettyOrRaw(jsonPretty, raw!!)
+            vmAI.chatReplaceTypingWith(
+                nodeId,
+                AiViewModel.ChatMsgVm(
+                    id = "result-$nodeId-${System.nanoTime()}",
+                    sender = AiViewModel.ChatSender.AI,
+                    json = pretty
+                )
+            )
+        }
+    }
+
+    // Append follow-up when idle; also persist to Survey
+    LaunchedEffect(followup, loading) {
+        val fu = followup
+        if (fu != null && !loading) {
+            vmAI.chatAppend(
+                nodeId,
+                AiViewModel.ChatMsgVm(
+                    id = "fu-$nodeId-${System.nanoTime()}",
+                    sender = AiViewModel.ChatSender.AI,
+                    text = fu
+                )
+            )
+            vmSurvey.addFollowupQuestion(nodeId, fu)
+            vmSurvey.setQuestion(fu, nodeId)
+        }
+    }
+
+    // If finished without final raw (cancel/error), remove typing bubble
+    LaunchedEffect(loading, raw) {
+        if (!loading && raw.isNullOrBlank()) {
+            vmAI.chatRemoveTyping(nodeId)
+        }
+    }
+
+    // Auto-scroll when chat size changes
+    LaunchedEffect(chat.size) {
+        delay(16)
+        scroll.animateScrollTo(scroll.maxValue)
+    }
+
+    // Keep pinned to bottom while streaming grows
+    LaunchedEffect(stream) {
+        if (loading) {
+            delay(24)
+            scroll.scrollTo(scroll.maxValue)
+        }
+    }
+
+    // Submit current answer (keeps IME open)
+    fun submit() {
+        val answer = composer.trim()
+        if (answer.isBlank() || loading) return
+        vmSurvey.setAnswer(answer, nodeId)
+        vmSurvey.answerLastFollowup(nodeId, answer)
+
+        vmAI.chatAppend(
+            nodeId,
+            AiViewModel.ChatMsgVm(
+                id = "u-$nodeId-${System.nanoTime()}",
+                sender = AiViewModel.ChatSender.USER,
+                text = answer
+            )
+        )
+
+        scope.launch {
+            val q = vmSurvey.getQuestion(nodeId)
+            val prompt = vmSurvey.getPrompt(nodeId, q, answer)
+            vmAI.evaluateAsync(prompt)
+        }
+
+        composer = ""
+    }
+
+    // Animated monotone background brush
+    val bgBrush = animatedMonotoneBackplate()
+
+    Scaffold(
+        topBar = { CompactTopBar(title = "Question • $nodeId") },
+        snackbarHost = { SnackbarHost(snack) },
+        // Root does not follow IME; only the composer does.
+        contentWindowInsets = WindowInsets(0),
+        bottomBar = {
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                tonalElevation = 4.dp,
+                shadowElevation = 8.dp,
+                modifier = Modifier.neutralEdge(alpha = 0.14f, corner = 16.dp, stroke = 1.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .windowInsetsPadding(WindowInsets.ime)
+                        .padding(top = 6.dp)
+                ) {
+                    ChatComposer(
+                        value = composer,
+                        onValueChange = {
+                            composer = it
+                            vmSurvey.setAnswer(it, nodeId)
+                        },
+                        onSend = ::submit,
+                        enabled = !loading,
+                        focusRequester = focusRequester
+                    )
+                    HorizontalDivider(Modifier, DividerDefaults.Thickness, DividerDefaults.color)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(
+                            onClick = {
+                                vmAI.resetStates()
+                                onBack()
+                            }
+                        ) { Text("Back") }
+
+                        Spacer(Modifier.weight(1f))
+
+                        OutlinedButton(
+                            onClick = {
+                                vmAI.resetStates()
+                                onNext()
+                            }
+                        ) { Text("Next") }
+                    }
+                }
+            }
+        }
+    ) { pad ->
+        Column(
+            modifier = Modifier
+                .padding(pad)
+                .fillMaxSize()
+                .background(bgBrush)
+                .pointerInput(Unit) {
+                    // Background tap clears focus and hides IME
+                    detectTapGestures {
+                        focusManager.clearFocus(force = true)
+                        keyboard?.hide()
+                    }
+                }
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(scroll),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                chat.forEach { m ->
+                    val isAi = m.sender != AiViewModel.ChatSender.USER
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = if (isAi) Arrangement.Start else Arrangement.End
+                    ) {
+                        if (m.json != null) {
+                            JsonBubbleMono(pretty = m.json, snack = snack)
+                        } else {
+                            BubbleMono(
+                                text = m.text.orEmpty(),
+                                isAi = isAi,
+                                isTyping = m.isTyping
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Clear transient AI-only state when leaving this node (keeps chat history)
+    DisposableEffect(Unit) {
+        onDispose { vmAI.resetStates() }
+    }
+}
+
+/* ───────────────────────────── Chat bubbles ─────────────────────────────── */
+
+/**
+ * Ultra-slim monotone bubble with micro-tail. Two variants:
+ *  - AI: darker neutral gradient, tail on left.
+ *  - User: lighter neutral gradient, tail on right.
+ *
+ * Implementation details:
+ *  - All fills/edges are grayscale; we use low-alpha strokes and a soft
+ *    radial glow for depth instead of heavy shadows.
+ */
+@Composable
+private fun BubbleMono(
+    text: String,
+    isAi: Boolean,
+    isTyping: Boolean,
+    maxWidth: Dp = 520.dp
+) {
+    val cs = MaterialTheme.colorScheme
+
+    val corner = 12.dp
+    val padH = 10.dp
+    val padV = 7.dp
+    val tailW = 7f
+    val tailH = 6f
+
+    // Neutral gradients (strict grayscale). AI is darker; User is lighter.
+    val stops = if (isAi)
+        listOf(Color(0xFF111111), Color(0xFF1E1E1E), Color(0xFF2A2A2A))
+    else
+        listOf(Color(0xFFEDEDED), Color(0xFFD9D9D9), Color(0xFFC8C8C8))
+
+    // Tiny motion to keep the surface “alive” while staying subtle.
+    val t = rememberInfiniteTransition(label = "bubble-mono")
+    val p by t.animateFloat(
+        0f, 1f,
+        animationSpec = infiniteRepeatable(tween(4600, easing = LinearEasing), RepeatMode.Restart),
+        label = "p"
+    )
+    val grad = Brush.linearGradient(
+        colors = stops.map { c -> lerp(c, cs.surface, 0.12f) },
+        start = Offset(0f, 0f),
+        end = Offset(400f + 220f * p, 360f - 180f * p)
+    )
+
+    val textColor = if (isAi) Color(0xFFECECEC) else Color(0xFF111111)
+    val shape = RoundedCornerShape(
+        topStart = corner, topEnd = corner,
+        bottomStart = if (isAi) 4.dp else corner,
+        bottomEnd = if (isAi) corner else 4.dp
+    )
+
+    Surface(
+        color = Color.Transparent,
+        tonalElevation = 0.dp,
+        shadowElevation = 3.dp,
+        shape = shape,
+        modifier = Modifier
+            .widthIn(max = maxWidth)
+            .drawBehind {
+                val cr = CornerRadius(corner.toPx(), corner.toPx())
+                // Fill
+                drawRoundRect(brush = grad, cornerRadius = cr)
+                // Tail
+                val x = if (isAi) 12f else size.width - 12f
+                val dir = if (isAi) -1 else 1
+                drawPath(
+                    path = Path().apply {
+                        moveTo(x, size.height)
+                        lineTo(x + dir * tailW, size.height - tailH)
+                        lineTo(x + dir * tailW * 0.4f, size.height - tailH * 0.6f)
+                        close()
+                    },
+                    brush = grad
+                )
+                // Subtle inner rim (soft depth)
+                drawRoundRect(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color.White.copy(0.06f), Color.Transparent),
+                        center = center, radius = size.minDimension * 0.54f
+                    ),
+                    cornerRadius = cr
+                )
+            }
+            .neutralEdge(alpha = 0.18f, corner = corner, stroke = 0.8.dp)
+    ) {
+        Box(Modifier.padding(horizontal = padH, vertical = padV)) {
+            if (isTyping && text.isBlank()) {
+                TypingDots(color = textColor)
+            } else {
+                Text(
+                    text = text,
+                    color = textColor,
+                    style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 18.sp)
+                )
+            }
+        }
+    }
+}
+
+/* Three animated dots with phase-shifted alpha wave (single animator). */
+@Composable
+private fun TypingDots(color: Color) {
+    val t = rememberInfiniteTransition(label = "typing")
+    val a1 by t.animateFloat(0.2f, 1f, infiniteRepeatable(tween(900, 0, LinearEasing)), label = "a1")
+    val a2 by t.animateFloat(0.2f, 1f, infiniteRepeatable(tween(900, 150, LinearEasing)), label = "a2")
+    val a3 by t.animateFloat(0.2f, 1f, infiniteRepeatable(tween(900, 300, LinearEasing)), label = "a3")
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Dot(a1, color); Dot(a2, color); Dot(a3, color)
+    }
+}
+@Composable private fun Dot(alpha: Float, color: Color) {
+    Box(Modifier.size(8.dp).background(color.copy(alpha = alpha), CircleShape))
+}
+
+/* ───────────────────────────── JSON bubble ──────────────────────────────── */
+
+/**
+ * Compact JSON bubble with neutral header and copy action.
+ * - Collapsed mode shows a tiny preview stub, keeping the feed readable.
+ * - Expanded mode uses a monospaced font with horizontal scroll for wide JSON.
+ */
+@Composable
+private fun JsonBubbleMono(
+    pretty: String,
+    collapsedMaxHeight: Dp = 72.dp,
+    snack: SnackbarHostState? = null
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val cs = MaterialTheme.colorScheme
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    val clip = RoundedCornerShape(10.dp)
+
+    Surface(
+        color = cs.surfaceVariant.copy(alpha = 0.60f),
+        tonalElevation = 0.dp,
+        shadowElevation = 3.dp,
+        shape = clip,
+        modifier = Modifier
+            .widthIn(max = 580.dp)
+            .animateContentSize()
+            .neutralEdge(alpha = 0.16f, corner = 10.dp, stroke = 1.dp)
+            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                expanded = !expanded
+            }
+    ) {
+        Column {
+            // Neutral header gradient (dark → light gray), very low contrast
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                Color(0xFF1F1F1F).copy(0.22f),
+                                Color(0xFF3A3A3A).copy(0.22f),
+                                Color(0xFF6A6A6A).copy(0.22f)
+                            )
+                        )
+                    )
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val scoreText = extractScore(pretty)?.let { "$it / 100" } ?: "—"
+                Text(
+                    text = if (expanded) "Result JSON  •  Score $scoreText  (tap to collapse)"
+                    else "Score $scoreText  •  tap to expand",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = cs.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(
+                    onClick = {
+                        clipboard.setText(AnnotatedString(pretty))
+                        scope.launch { snack?.showSnackbar("JSON copied") }
+                    },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(Icons.Outlined.ContentCopy, contentDescription = "Copy", tint = cs.onSurfaceVariant)
+                }
+            }
+
+            if (expanded) {
+                SelectionContainer {
+                    Text(
+                        text = pretty,
+                        color = cs.onSurface,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace, lineHeight = 18.sp
+                        ),
+                        modifier = Modifier
+                            .padding(10.dp)
+                            .horizontalScroll(rememberScrollState())
+                    )
+                }
+            } else {
+                Text(
+                    "Analysis preview…",
+                    color = cs.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .heightIn(max = collapsedMaxHeight)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                )
+            }
+        }
+    }
+}
+
+/* ───────────────────────────── Composer ─────────────────────────────────── */
+
+/**
+ * Slim glass composer that follows IME.
+ * - Uses only neutral tones; a thin neutral rim aligns with the overall style.
+ */
+@Composable
+private fun ChatComposer(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSend: () -> Unit,
+    enabled: Boolean,
+    focusRequester: FocusRequester
+) {
+    val cs = MaterialTheme.colorScheme
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .shadow(elevation = 8.dp, shape = CircleShape, clip = false)
+                .background(
+                    Brush.linearGradient(
+                        listOf(
+                            cs.surfaceVariant.copy(alpha = 0.65f),
+                            cs.surface.copy(alpha = 0.65f)
+                        )
+                    ),
+                    CircleShape
+                )
+                .neutralEdge(alpha = 0.14f, corner = 999.dp, stroke = 1.dp)
+                .padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier
+                    .weight(1f)
+                    .focusRequester(focusRequester),
+                placeholder = { Text("Type your answer…") },
+                minLines = 1,
+                maxLines = 5,
+                colors = OutlinedTextFieldDefaults.colors(
+                    unfocusedContainerColor = Color.Transparent,
+                    focusedContainerColor = Color.Transparent,
+                    disabledContainerColor = Color.Transparent,
+                    focusedBorderColor = Color.Transparent,
+                    unfocusedBorderColor = Color.Transparent
+                ),
+                textStyle = MaterialTheme.typography.bodyMedium
+            )
+            FilledTonalButton(
+                onClick = onSend,
+                enabled = enabled && value.isNotBlank(),
+                shape = CircleShape,
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = "Send")
+            }
+        }
+    }
+}
+
+/* ─────────────────────────── Visual utilities ───────────────────────────── */
+
+/**
+ * Animated monotone background.
+ * - Strict grayscale stops blended with theme.surface for dynamic color harmony.
+ * - End vector slowly drifts; no hue changes, only luminance motion.
+ */
+@Composable
+private fun animatedMonotoneBackplate(): Brush {
+    val cs = MaterialTheme.colorScheme
+    val t = rememberInfiniteTransition(label = "bg-mono")
+    val p by t.animateFloat(
+        0f, 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(16000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "bgp"
+    )
+
+    val c0 = lerp(Color(0xFF0F0F10), cs.surface, 0.10f)
+    val c1 = lerp(Color(0xFF1A1A1B), cs.surface, 0.12f)
+    val c2 = lerp(Color(0xFF2A2A2B), cs.surface, 0.14f)
+    val c3 = lerp(Color(0xFF3A3A3B), cs.surface, 0.16f)
+
+    val endX = 1200f + 240f * p
+    val endY = 820f - 180f * p
+
+    return Brush.linearGradient(
+        colors = listOf(c0, c1, c2, c3),
+        start = Offset(0f, 0f),
+        end = Offset(endX, endY)
+    )
 }
 
 /**
- * Pretty prints JSON when possible. If parsing fails, attempts to recover a JSON fragment from
- * fenced blocks or leading/trailing annotations; otherwise returns the original raw string.
+ * Neutral rim edge for surfaces (sweep gray). Kept extremely light to avoid
+ * the “thick border” look; intended as a premium polish rather than framing.
+ *
+ * @param alpha Overall opacity of the rim.
+ * @param corner Corner radius to match the decorated container.
+ * @param stroke Stroke width in dp (keep small, e.g., 0.8–1.2dp).
  */
+@Composable
+private fun Modifier.neutralEdge(
+    alpha: Float = 0.16f,
+    corner: Dp = 12.dp,
+    stroke: Dp = 1.dp
+): Modifier = this.then(
+    Modifier.drawBehind {
+        val cr = CornerRadius(corner.toPx(), corner.toPx())
+        val sweep = Brush.sweepGradient(
+            0f to Color(0xFF101010).copy(alpha = alpha),
+            0.25f to Color(0xFF3A3A3A).copy(alpha = alpha),
+            0.5f to Color(0xFF7A7A7A).copy(alpha = alpha * 0.9f),
+            0.75f to Color(0xFF3A3A3A).copy(alpha = alpha),
+            1f to Color(0xFF101010).copy(alpha = alpha)
+        )
+        drawRoundRect(brush = sweep, style = Stroke(width = stroke.toPx()), cornerRadius = cr)
+    }
+)
+
+/* ───────────────────────────── JSON helpers ─────────────────────────────── */
+
 private fun prettyOrRaw(json: Json, raw: String): String {
     val stripped = stripCodeFence(raw)
     val element = parseJsonLenient(json, stripped)
-    return if (element != null) {
-        json.encodeToString(JsonElement.serializer(), element)
-    } else raw
+    return if (element != null) json.encodeToString(JsonElement.serializer(), element) else raw
 }
 
 private fun parseJsonLenient(json: Json, text: String): JsonElement? {
     val trimmed = text.trim()
     if (trimmed.isEmpty()) return null
-
     parseOrNull(json, trimmed)?.let { return it }
-
-    val length = trimmed.length
     var i = 0
-    while (i < length) {
-        val ch = trimmed[i]
-        if (ch == '{' || ch == '[') {
-            val end = findMatchingJsonBoundary(trimmed, i)
-            if (end != -1) {
-                val candidate = trimmed.substring(i, end + 1)
-                parseOrNull(json, candidate)?.let { return it }
-                i = end
+    while (i < trimmed.length) {
+        when (trimmed[i]) {
+            '{', '[' -> {
+                val end = findMatchingJsonBoundary(trimmed, i)
+                if (end != -1) {
+                    val candidate = trimmed.substring(i, end + 1)
+                    parseOrNull(json, candidate)?.let { return it }
+                    i = end
+                }
             }
         }
         i++
@@ -323,102 +732,97 @@ private fun parseOrNull(json: Json, value: String): JsonElement? =
     runCatching { json.parseToJsonElement(value) }.getOrNull()
 
 private fun stripCodeFence(text: String): String {
-    val trimmed = text.trim()
-    if (!trimmed.startsWith("```")) return trimmed
-    val closing = trimmed.indexOf("```", startIndex = 3)
-    if (closing == -1) return trimmed
-    val newline = trimmed.indexOf('\n', startIndex = 3)
-    val contentStart = when {
-        newline in 4 until closing -> newline + 1
-        else -> 3
-    }
-    return trimmed.substring(contentStart, closing).trim()
+    val t = text.trim()
+    if (!t.startsWith("```")) return t
+    val closing = t.indexOf("```", startIndex = 3)
+    if (closing == -1) return t
+    val newline = t.indexOf('\n', startIndex = 3)
+    val contentStart = if (newline in 4 until closing) newline + 1 else 3
+    return t.substring(contentStart, closing).trim()
 }
 
 private fun findMatchingJsonBoundary(text: String, start: Int): Int {
-    if (start < 0 || start >= text.length) return -1
+    if (start !in text.indices) return -1
     val open = text[start]
     if (open != '{' && open != '[') return -1
-
     val stack = ArrayDeque<Char>()
     stack.addLast(open)
     var i = start + 1
     var inString = false
-
     while (i < text.length) {
         val c = text[i]
         if (inString) {
-            if (c == '\\' && i + 1 < text.length) {
-                i += 2
-                continue
-            }
-            if (c == '"') {
-                inString = false
-            }
+            if (c == '\\' && i + 1 < text.length) { i += 2; continue }
+            if (c == '"') inString = false
         } else {
             when (c) {
                 '"' -> inString = true
                 '{', '[' -> stack.addLast(c)
-                '}' -> {
-                    if (stack.isEmpty() || stack.removeLast() != '{') return -1
-                }
-                ']' -> {
-                    if (stack.isEmpty() || stack.removeLast() != '[') return -1
-                }
+                '}' -> if (stack.isEmpty() || stack.removeLast() != '{') return -1
+                ']' -> if (stack.isEmpty() || stack.removeLast() != '[') return -1
             }
         }
-
         if (stack.isEmpty()) return i
         i++
     }
     return -1
 }
 
-/* --------------------------- Horizontal Scrollbar -------------------------- */
+/* ───────────────────────────── Preview ─────────────────────────────────── */
 
+@SuppressLint("RememberInComposition")
+@Preview(showBackground = true, name = "Chat — Monotone Chic Preview")
 @Composable
-private fun HorizontalScrollbar(
-    scrollState: androidx.compose.foundation.ScrollState,
-    modifier: Modifier = Modifier,
-    thickness: Dp = 3.dp,
-    thumbMinWidth: Dp = 24.dp,
-) {
-    val radius = thickness / 2
-    val density = LocalDensity.current
-    var viewportPx by remember { mutableStateOf(0) }
-
-    // Evaluate theme-derived colors outside of draw phase
-    val trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
-    val thumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-
-    Box(
-        modifier
-            .height(thickness)
-            .fillMaxWidth()
-            .background(trackColor, RoundedCornerShape(radius))
-            .onGloballyPositioned { viewportPx = it.size.width }
-            .drawWithContent {
-                drawContent()
-
-                val max = scrollState.maxValue // contentWidth - viewportWidth
-                if (viewportPx <= 0 || max <= 0) return@drawWithContent
-
-                val viewport = viewportPx.toFloat()
-                val content = viewport + max
-                val thumbW = (viewport * viewport / content)
-                    .coerceAtLeast(with(density) { thumbMinWidth.toPx() })
-                    .coerceAtMost(viewport)
-
-                val progress = scrollState.value.toFloat() / max
-                val trackW = viewport - thumbW
-                val thumbX = trackW * progress
-
-                drawRoundRect(
-                    color = thumbColor,
-                    topLeft = Offset(thumbX, 0f),
-                    size = Size(thumbW, size.height),
-                    cornerRadius = CornerRadius(with(density) { radius.toPx() })
-                )
+private fun ChatPreview() {
+    MaterialTheme {
+        val fake = listOf(
+            AiViewModel.ChatMsgVm("q", AiViewModel.ChatSender.AI, text = "How much yield do you lose because of FAW?"),
+            AiViewModel.ChatMsgVm("u1", AiViewModel.ChatSender.USER, text = "About 10% over 3 seasons."),
+            AiViewModel.ChatMsgVm(
+                "r1",
+                AiViewModel.ChatSender.AI,
+                json = """
+                    {
+                      "analysis":"Clear unit",
+                      "expected answer":"~10% avg loss over 3 seasons",
+                      "follow-up question":"Is 10% per season or overall?",
+                      "score":88
+                    }
+                """.trimIndent()
+            ),
+            AiViewModel.ChatMsgVm("fu", AiViewModel.ChatSender.AI, text = "Is that 10% per season or overall?")
+        )
+        val scroll = rememberScrollState()
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(animatedMonotoneBackplate())
+                .padding(16.dp)
+        ) {
+            Column(
+                Modifier
+                    .weight(1f)
+                    .verticalScroll(scroll),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                fake.forEach { m ->
+                    val isAi = m.sender != AiViewModel.ChatSender.USER
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = if (isAi) Arrangement.Start else Arrangement.End
+                    ) {
+                        if (m.json != null) JsonBubbleMono(pretty = m.json)
+                        else BubbleMono(m.text.orEmpty(), isAi = isAi, isTyping = false)
+                    }
+                }
             }
-    )
+            ChatComposer(
+                value = "",
+                onValueChange = {},
+                onSend = {},
+                enabled = true,
+                focusRequester = FocusRequester()
+            )
+        }
+    }
 }

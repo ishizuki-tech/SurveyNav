@@ -6,7 +6,6 @@ import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
-import com.negi.survey.Logx
 import com.negi.survey.ModelAssetRule
 import com.negi.survey.config.SurveyConfig
 import com.negi.survey.config.SurveyConfigLoader
@@ -87,6 +86,7 @@ class SlmDirectRepositoryInstrumentationTest {
 
     @Before
     fun setUp() {
+
         appCtx = InstrumentationRegistry.getInstrumentation().targetContext
 
         // あれば設定検証（必須ではないが、資産破損を早期検知）
@@ -140,7 +140,7 @@ class SlmDirectRepositoryInstrumentationTest {
             assertNotNull("Model instance must exist", model.instance)
         }
 
-        repo = SlmDirectRepository(appCtx, model)
+        repo = SlmDirectRepository(model,config)
 
         runCatching { assertFalse("SLM should be idle on start", SLM.isBusy(model)) }
             .onFailure { Logx.w(TAG, "SLM.isBusy check failed: ${it.message}") }

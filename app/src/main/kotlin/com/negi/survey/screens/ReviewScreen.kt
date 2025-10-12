@@ -1,3 +1,4 @@
+// file: app/src/main/java/com/negi/survey/screens/ReviewScreen.kt
 package com.negi.survey.screens
 
 import androidx.compose.foundation.layout.Arrangement
@@ -8,20 +9,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
@@ -35,69 +35,104 @@ fun ReviewScreen(
     onNext: () -> Unit,
     onBack: () -> Unit
 ) {
-    // ---- Smaller base typography ----
-    val smallBase = MaterialTheme.typography.bodySmall.copy(
-        fontSize = 10.sp,
-        lineHeight = 13.sp
+    // ---- Compact typography presets (tight but readable) ----
+    val baseCompact = MaterialTheme.typography.bodySmall.copy(
+        fontSize = 11.sp,
+        lineHeight = 14.sp
     )
-    val titleSmallTight = MaterialTheme.typography.titleSmall.copy(
+    val titleTight = MaterialTheme.typography.titleSmall.copy(
         fontSize = 12.sp,
         lineHeight = 14.sp
     )
-    val labelTight = MaterialTheme.typography.labelMedium.copy(
+    val labelTight = MaterialTheme.typography.labelSmall.copy(
         fontSize = 10.sp,
         lineHeight = 12.sp
     )
     val bodyTight = MaterialTheme.typography.bodySmall.copy(
-        fontSize = 10.sp,
-        lineHeight = 13.sp
+        fontSize = 11.sp,
+        lineHeight = 14.sp
     )
 
+    // ---- Collect VM state ----
     val allQuestions by vm.questions.collectAsState()
     val allAnswers by vm.answers.collectAsState()
     val allFollowups by vm.followups.collectAsState()
 
-    CompositionLocalProvider(LocalTextStyle provides smallBase) {
+    // ---- Memoized, sorted views for stable item ordering ----
+    val qaEntries = remember(allAnswers, allQuestions) {
+        // Pair nodeId with question + answer, sorted by nodeId for predictability
+        allAnswers.entries
+            .map { (id, ans) ->
+                val q = allQuestions[id].orEmpty()
+                Triple(id, q, ans)
+            }
+            .sortedBy { it.first }
+    }
+
+    val sortedFollowups = remember(allFollowups) {
+        // Sort nodes by id; keep per-node followups in original order
+        allFollowups.toSortedMap()
+    }
+
+    CompositionLocalProvider(LocalTextStyle provides baseCompact) {
         Scaffold(containerColor = Color.Transparent) { pad ->
-            Column(
-                Modifier
+            // Use LazyColumn for performance and smoother scrolling on large datasets
+            LazyColumn(
+                modifier = Modifier
                     .padding(pad)
-                    .padding(16.dp)
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("==Review==", style = titleSmallTight)
-                Spacer(Modifier.height(8.dp))
+                // ====== Header ======
+                item {
+                    Text("Review", style = titleTight)
+                }
 
-                // ===== Q&A =====
-                ElevatedCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text("All Original Questions and Answers", style = titleSmallTight)
-                        Spacer(Modifier.height(6.dp))
-                        ProvideTextStyle(bodyTight) {
-                            val entries = allAnswers.entries.sortedBy { it.key }
-                            if (entries.isEmpty()) {
-                                Text(" There is no records yet.")
+                // ====== Q & A Card ======
+                item {
+                    ElevatedCard(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text("All Original Questions and Answers", style = titleTight)
+                            Spacer(Modifier.height(6.dp))
+
+                            if (qaEntries.isEmpty()) {
+                                Text("No records yet.", style = bodyTight)
                             } else {
-                                entries.forEachIndexed { idx, (key, answer) ->
-
-                                    if (idx > 0) HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                                // Draw each Q/A row with dividers
+                                qaEntries.forEachIndexed { idx, (nodeId, question, answer) ->
+                                    if (idx > 0) {
+                                        HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                                    }
 
                                     Column {
+                                        // Node id label
                                         Text(
-                                            text = key,
+                                            text = nodeId,
                                             style = labelTight,
                                             color = MaterialTheme.colorScheme.primary
                                         )
                                         Spacer(Modifier.height(2.dp))
-                                        Text(
-                                            text = "Q: " + (allQuestions[key].orEmpty().ifBlank { "- No Question." })
-                                        )
+
+                                        // Question (show placeholder when missing)
+                                        val qText =
+                                            if (question.isBlank()) "– No Question." else "Q: $question"
+                                        Text(qText, style = bodyTight)
+
                                         Spacer(Modifier.height(2.dp))
+
+                                        // Answer (highlight missing answer a little)
+                                        val aText =
+                                            if (answer.isBlank()) "– No Answer."
+                                            else answer
                                         Text(
-                                            text = "A: " + (answer.ifBlank { "- No Answer." }),
+                                            text = "A: $aText",
                                             maxLines = 6,
-                                            overflow = TextOverflow.Ellipsis
+                                            overflow = TextOverflow.Ellipsis,
+                                            color = if (answer.isBlank())
+                                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                            else LocalTextStyle.current.color,
+                                            style = bodyTight
                                         )
                                     }
                                 }
@@ -106,35 +141,45 @@ fun ReviewScreen(
                     }
                 }
 
-                Spacer(Modifier.height(12.dp))
+                // ====== Followups Card ======
+                item {
+                    ElevatedCard(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text("Follow-up History", style = titleTight)
+                            Spacer(Modifier.height(6.dp))
 
-                // ===== Followups =====
-                ElevatedCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text("Followup History.", style = titleSmallTight)
-                        Spacer(Modifier.height(6.dp))
-
-                        ProvideTextStyle(bodyTight) {
-                            if (allFollowups.isEmpty()) {
-                                Text(" No Followup Questions.")
+                            if (sortedFollowups.isEmpty()) {
+                                Text("No follow-up questions.", style = bodyTight)
                             } else {
-                                val sortedFollowups = allFollowups.toSortedMap()
-                                sortedFollowups.forEach { (nid, list) ->
-                                    HorizontalDivider(
-                                        Modifier.padding(vertical = 6.dp))
+                                sortedFollowups.entries.forEachIndexed { idx, (nodeId, list) ->
+                                    if (idx > 0) {
+                                        HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                                    }
+
                                     Text(
-                                        "Node: $nid",
+                                        text = "Node: $nodeId",
                                         style = labelTight,
                                         color = MaterialTheme.colorScheme.primary
                                     )
+
                                     if (list.isEmpty()) {
-                                        Text("")
+                                        Text("– No follow-ups recorded.", style = bodyTight)
                                     } else {
+                                        // Render each follow-up line
                                         list.forEachIndexed { i, entry ->
-                                            Column(Modifier.padding(top = 4.dp)) {
-                                                Text("${i + 1}. Q: ${entry.question}")
-                                                Text("    A: ${entry.answer ?: "— No Answer."}")
-                                            }
+                                            // entry.question: String, entry.answer: String?
+                                            Spacer(Modifier.height(4.dp))
+                                            Text(
+                                                "${i + 1}. Q: ${entry.question}",
+                                                style = bodyTight
+                                            )
+                                            Text(
+                                                "   A: ${entry.answer ?: "– No Answer."}",
+                                                style = bodyTight,
+                                                color = if (entry.answer.isNullOrBlank())
+                                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                                else LocalTextStyle.current.color
+                                            )
                                         }
                                     }
                                 }
@@ -143,13 +188,17 @@ fun ReviewScreen(
                     }
                 }
 
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Button(onClick = onBack, modifier = Modifier.weight(1f)) { Text("Back") }
-                    Button(onClick = onNext, modifier = Modifier.weight(1f)) { Text("Next") }
+                // ====== Bottom Buttons ======
+                item {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp, bottom = 8.dp)
+                    ) {
+                        Button(onClick = onBack, modifier = Modifier.weight(1f)) { Text("Back") }
+                        Button(onClick = onNext, modifier = Modifier.weight(1f)) { Text("Next") }
+                    }
                 }
             }
         }

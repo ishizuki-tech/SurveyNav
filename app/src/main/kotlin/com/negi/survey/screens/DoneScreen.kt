@@ -1,3 +1,4 @@
+// file: app/src/main/java/com/negi/survey/screens/DoneScreen.kt
 package com.negi.survey.screens
 
 import android.content.ContentValues
@@ -34,30 +35,40 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.negi.survey.net.GitHubConfig
 import com.negi.survey.net.GitHubUploader
-import com.negi.survey.vm.SurveyViewModel
 import com.negi.survey.net.GitHubUploadWorker
+import com.negi.survey.vm.SurveyViewModel
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 
 /**
- * Done screen:
- * - Lists answers and follow-ups
- * - Copy / Upload to GitHub
- * - Optional auto-save to device (no picker)
- * - Schedule upload when online (WorkManager)
+ * Done screen
+ *
+ * Responsibilities:
+ *  - Summarize answers & follow-ups
+ *  - Allow copy/save/upload of the JSON summary
+ *  - Provide "upload later when online" via WorkManager
+ *
+ * Key points:
+ *  - JSON serialization uses escapeJson() only (no manual newline replacement) to avoid double-escaping.
+ *  - Auto-save uses MediaStore on API 29+, app-external files dir on older devices.
+ *  - GitHub upload is optional; pass a GitHubConfig to enable the buttons.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DoneScreen(
     vm: SurveyViewModel,
     onRestart: () -> Unit,
-    gitHubConfig: GitHubConfig? = null,   // pass to enable upload/schedule buttons
-    autoSaveToDevice: Boolean = false     // set true to auto-save once on first show
+    gitHubConfig: GitHubConfig? = null,   // enable upload buttons when non-null
+    autoSaveToDevice: Boolean = false     // save once automatically on first composition
 ) {
     val questions by vm.questions.collectAsState(initial = emptyMap())
     val answers by vm.answers.collectAsState(initial = emptyMap())
@@ -66,37 +77,42 @@ fun DoneScreen(
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val uploading = remember { mutableStateOf(false) }
-    val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     // Build JSON export text (answers + followups)
+    // NOTE: Do not pre-replace newlines; escapeJson() handles them correctly.
     val jsonText = remember(questions, answers, followups) {
         buildString {
             append("{\n")
             append("  \"answers\": {\n")
-            questions.entries.forEachIndexed { idx, (id, q) ->
-                val a = answers[id]?.replace("\n", "\\n") ?: ""
+            // (Optional) stabilize order for deterministic export:
+            val qEntries = questions.entries.toList() // .sortedBy { it.key }
+            qEntries.forEachIndexed { idx, (id, q) ->
+                val a = answers[id].orEmpty()
                 append("    \"").append(escapeJson(id)).append("\": {\n")
                 append("      \"question\": \"").append(escapeJson(q)).append("\",\n")
                 append("      \"answer\": \"").append(escapeJson(a)).append("\"\n")
                 append("    }")
-                if (idx != questions.size - 1) append(",")
+                if (idx != qEntries.lastIndex) append(",")
                 append("\n")
             }
             append("  },\n")
             append("  \"followups\": {\n")
-            followups.entries.forEachIndexed { i, (ownerId, list) ->
+            val fEntries = followups.entries.toList() // .sortedBy { it.key }
+            fEntries.forEachIndexed { i, (ownerId, list) ->
                 append("    \"").append(escapeJson(ownerId)).append("\": [\n")
                 list.forEachIndexed { j, fu ->
-                    val q = fu.question.replace("\n", "\\n")
-                    val a = (fu.answer ?: "").replace("\n", "\\n")
-                    append("      { \"question\": \"").append(escapeJson(q))
-                        .append("\", \"answer\": \"").append(escapeJson(a)).append("\" }")
+                    val fq = fu.question
+                    val fa = fu.answer.orEmpty()
+                    append("      { ")
+                        .append("\"question\": \"").append(escapeJson(fq)).append("\", ")
+                        .append("\"answer\": \"").append(escapeJson(fa)).append("\" ")
+                        .append("}")
                     if (j != list.lastIndex) append(",")
                     append("\n")
                 }
                 append("    ]")
-                if (i != followups.size - 1) append(",")
+                if (i != fEntries.lastIndex) append(",")
                 append("\n")
             }
             append("  }\n")
@@ -104,13 +120,15 @@ fun DoneScreen(
         }
     }
 
-    // Run once on first composition to auto-save (no picker)
+    // Run once to auto-save (no picker interaction)
     val autoSavedOnce = remember { mutableStateOf(false) }
     LaunchedEffect(autoSaveToDevice, jsonText) {
         if (autoSaveToDevice && !autoSavedOnce.value) {
             val fileName = "survey_${System.currentTimeMillis()}.json"
             runCatching {
-                val result = saveJsonAutomatically(context = context, fileName = fileName, content = jsonText)
+                val result = withContext(Dispatchers.IO) {
+                    saveJsonAutomatically(context = context, fileName = fileName, content = jsonText)
+                }
                 autoSavedOnce.value = true
                 snackbar.showOnce("Saved to device: ${result.location}")
             }.onFailure { e ->
@@ -119,7 +137,8 @@ fun DoneScreen(
         }
     }
 
-    Scaffold(containerColor = Color.Transparent,
+    Scaffold(
+        containerColor = Color.Transparent,
         topBar = { TopAppBar(title = { Text("Done") }) },
         snackbarHost = { SnackbarHost(hostState = snackbar) }
     ) { pad ->
@@ -141,10 +160,17 @@ fun DoneScreen(
             } else {
                 questions.forEach { (id, q) ->
                     val a = answers[id].orEmpty()
-                    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
+                    ) {
                         Text("Q: $q", style = MaterialTheme.typography.bodyMedium)
                         Spacer(Modifier.height(4.dp))
-                        Text("A: ${if (a.isBlank()) "(empty)" else a}", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            "A: ${if (a.isBlank()) "(empty)" else a}",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
                     }
                     Divider()
                 }
@@ -159,7 +185,11 @@ fun DoneScreen(
                 Text("No follow-ups.", style = MaterialTheme.typography.bodyMedium)
             } else {
                 followups.forEach { (ownerId, list) ->
-                    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp)
+                    ) {
                         Text("Owner node: $ownerId", style = MaterialTheme.typography.labelLarge)
                         Spacer(Modifier.height(6.dp))
                         list.forEachIndexed { idx, fu ->
@@ -178,7 +208,7 @@ fun DoneScreen(
 
             Spacer(Modifier.height(24.dp))
 
-            // Actions
+            // Actions row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -193,15 +223,17 @@ fun DoneScreen(
                                 try {
                                     val fileName = "survey_${System.currentTimeMillis()}.json"
                                     val path = "${gitHubConfig.pathPrefix.trimEnd('/')}/$fileName"
-                                    val result = GitHubUploader.uploadJson(
-                                        owner = gitHubConfig.owner,
-                                        repo = gitHubConfig.repo,
-                                        branch = gitHubConfig.branch,
-                                        path = path,
-                                        token = gitHubConfig.token,
-                                        content = jsonText,
-                                        message = "Upload $fileName"
-                                    )
+                                    val result = withContext(Dispatchers.IO) {
+                                        GitHubUploader.uploadJson(
+                                            owner = gitHubConfig.owner,
+                                            repo = gitHubConfig.repo,
+                                            branch = gitHubConfig.branch,
+                                            path = path,
+                                            token = gitHubConfig.token,
+                                            content = jsonText,
+                                            message = "Upload $fileName"
+                                        )
+                                    }
                                     snackbar.showOnce("Uploaded: ${result.fileUrl ?: result.commitSha}")
                                 } catch (e: Exception) {
                                     snackbar.showOnce("Upload failed: ${e.message}")
@@ -248,8 +280,8 @@ private data class SaveResult(val uri: Uri?, val file: File?, val location: Stri
 
 /**
  * Saves JSON automatically:
- * - API 29+ -> MediaStore Downloads/SurveyNav (visible in Files app)
- * - API 28- -> app-specific external Downloads/SurveyNav (no permission)
+ *  - API 29+ -> MediaStore Downloads/SurveyNav (visible in Files app)
+ *  - API 28- -> app-specific external Downloads/SurveyNav (no permission)
  */
 private fun saveJsonAutomatically(
     context: android.content.Context,
@@ -313,6 +345,7 @@ private suspend fun SnackbarHostState.showOnce(message: String) {
     showSnackbar(message)
 }
 
+/** Minimal JSON string escaper; keeps output valid with quotes/newlines/backslashes/tabs. */
 private fun escapeJson(s: String): String =
     buildString(s.length + 8) {
         s.forEach { ch ->
