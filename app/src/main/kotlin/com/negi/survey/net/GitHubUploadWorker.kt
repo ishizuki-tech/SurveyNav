@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -39,6 +40,7 @@ class GitHubUploadWorker(
     params: WorkerParameters
 ) : CoroutineWorker(appContext, params) {
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     override suspend fun doWork(): Result {
         // --- Read & validate inputs (fail fast with clear semantics) ---
         val cfg = GitHubConfig(
@@ -146,6 +148,7 @@ class GitHubUploadWorker(
      * - Ongoing while in progress; auto-stops on success/failure.
      * - Android 14/15: declares DATA_SYNC foreground service type.
      */
+    @RequiresApi(Build.VERSION_CODES.Q)
     private fun foregroundInfo(
         notificationId: Int,
         pct: Int,

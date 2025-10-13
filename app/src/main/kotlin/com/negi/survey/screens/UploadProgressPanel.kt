@@ -1,15 +1,26 @@
 // file: app/src/main/java/com/negi/survey/screens/UploadProgressOverlay.kt
 package com.negi.survey.screens
 
+import android.annotation.SuppressLint
 import android.app.Application
 import android.content.Intent
-import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,13 +37,12 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -46,12 +56,14 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.work.WorkInfo
 import com.negi.survey.vm.UploadItemUi
 import com.negi.survey.vm.UploadQueueViewModel
 import kotlin.math.roundToInt
 
+@SuppressLint("UnrememberedMutableState")
 @Composable
 fun UploadProgressOverlay(
     vm: UploadQueueViewModel = viewModel(
@@ -129,13 +141,12 @@ fun UploadProgressOverlay(
                             modifier = Modifier.semantics { heading() }
                         )
                         Spacer(Modifier.height(8.dp))
-
                         LazyColumn(
                             modifier = Modifier.heightIn(max = 280.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             // Use stable keys (prefer id; fallback to fileName)
-                            items(items, key = { it.id ?: it.fileName }) { item ->
+                            items(items, key = { it.id }) { item ->
                                 UploadRowFancy(item)
                             }
                         }
@@ -151,7 +162,7 @@ private fun UploadRowFancy(u: UploadItemUi) {
     val ctx = LocalContext.current
 
     // Map state → accent color, icon, label.
-    // IMPORTANT: Don't call composables inside remember{}; just compute directly.
+    // IMPORTANT: Don't call composable inside remember{}; just compute directly.
     val (accent, icon, label) = styleFor(u.state)
 
     // Progress target value per state (null → indeterminate)
@@ -227,6 +238,7 @@ private fun UploadRowFancy(u: UploadItemUi) {
                     color = accent
                 )
             }
+
             WorkInfo.State.RUNNING -> {
                 LinearProgressIndicator(
                     progress = { animProgress },
@@ -242,6 +254,7 @@ private fun UploadRowFancy(u: UploadItemUi) {
                     )
                 }
             }
+
             WorkInfo.State.SUCCEEDED -> {
                 LinearProgressIndicator(
                     progress = { 1f },
@@ -253,13 +266,14 @@ private fun UploadRowFancy(u: UploadItemUi) {
                     Spacer(Modifier.height(6.dp))
                     TextButton(
                         onClick = {
-                            val i = Intent(Intent.ACTION_VIEW, Uri.parse(u.fileUrl))
+                            val i = Intent(Intent.ACTION_VIEW, u.fileUrl.toUri())
                                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             runCatching { ctx.startActivity(i) }
                         }
                     ) { Text("Open on GitHub") }
                 }
             }
+
             WorkInfo.State.FAILED -> {
                 // Error track with clear status color; keep layout consistent
                 LinearProgressIndicator(
@@ -275,6 +289,7 @@ private fun UploadRowFancy(u: UploadItemUi) {
                 )
                 // Optional: offer "details" or "retry" hooks here if ViewModel supports it
             }
+
             WorkInfo.State.CANCELLED -> {
                 LinearProgressIndicator(
                     progress = { 0f },
@@ -299,11 +314,11 @@ private fun UploadRowFancy(u: UploadItemUi) {
 private fun styleFor(state: WorkInfo.State): Triple<Color, ImageVector, String> {
     val c = MaterialTheme.colorScheme
     return when (state) {
-        WorkInfo.State.RUNNING   -> Triple(c.primary,        Icons.Outlined.CloudUpload, "Uploading")
-        WorkInfo.State.ENQUEUED  -> Triple(c.secondary,      Icons.Outlined.CloudQueue,  "Queued")
-        WorkInfo.State.BLOCKED   -> Triple(c.tertiary,       Icons.Outlined.Block,       "Blocked")
-        WorkInfo.State.SUCCEEDED -> Triple(c.inversePrimary, Icons.Outlined.CloudDone,   "Done")
-        WorkInfo.State.FAILED    -> Triple(c.error,          Icons.Outlined.ErrorOutline,"Failed")
-        WorkInfo.State.CANCELLED -> Triple(c.error,          Icons.Outlined.ErrorOutline,"Cancelled")
+        WorkInfo.State.RUNNING -> Triple(c.primary, Icons.Outlined.CloudUpload, "Uploading")
+        WorkInfo.State.ENQUEUED -> Triple(c.secondary, Icons.Outlined.CloudQueue, "Queued")
+        WorkInfo.State.BLOCKED -> Triple(c.tertiary, Icons.Outlined.Block, "Blocked")
+        WorkInfo.State.SUCCEEDED -> Triple(c.inversePrimary, Icons.Outlined.CloudDone, "Done")
+        WorkInfo.State.FAILED -> Triple(c.error, Icons.Outlined.ErrorOutline, "Failed")
+        WorkInfo.State.CANCELLED -> Triple(c.error, Icons.Outlined.ErrorOutline, "Cancelled")
     }
 }

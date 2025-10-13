@@ -1,11 +1,11 @@
 # -------------------------------
-# OS 一時ファイル
+# OS temporary files
 # -------------------------------
 .DS_Store
 Thumbs.db
 
 # -------------------------------
-# IDE/エディタ
+# IDE / Editors
 # -------------------------------
 .idea/
 *.iml
@@ -18,7 +18,7 @@ deploymentTargetDropDown.xml
 render.experimental.xml
 
 # -------------------------------
-# Gradle / Kotlin ビルド生成物
+# Gradle / Kotlin build artifacts
 # -------------------------------
 .gradle/
 .gradle-cache/
@@ -28,14 +28,14 @@ build/
 .kotlin/
 
 # -------------------------------
-# Android/NDK ビルド生成物
+# Android / NDK build artifacts
 # -------------------------------
 .externalNativeBuild/
 .cxx/
 output-metadata.json
 
 # -------------------------------
-# パッケージ出力物
+# Packaged outputs
 # -------------------------------
 *.apk
 *.ap_
@@ -43,7 +43,7 @@ output-metadata.json
 *.aar
 
 # -------------------------------
-# ローカル設定・資格情報（絶対コミットしない）
+# Local config & credentials (NEVER commit)
 # -------------------------------
 local.properties
 gradle.properties.local
@@ -64,7 +64,7 @@ secrets*.gradle
 secret*.properties
 
 # -------------------------------
-# Google/Firebase 関連
+# Google / Firebase related
 # -------------------------------
 google-services.json
 GoogleService-Info.plist
@@ -72,7 +72,7 @@ GoogleService-Info.plist
 **/crashlytics-build.properties
 
 # -------------------------------
-# ログ / プロファイル / ダンプ
+# Logs / profiles / dumps
 # -------------------------------
 *.log
 *.hprof
@@ -80,7 +80,7 @@ GoogleService-Info.plist
 perf-*.json
 
 # -------------------------------
-# Lint / レポート / カバレッジ
+# Lint / reports / coverage
 # -------------------------------
 **/lint-results*.xml
 **/lint-results*.html
@@ -92,21 +92,21 @@ perf-*.json
 **/coverage.ec
 
 # -------------------------------
-# KAPT / KSP / 生成物
+# KAPT / KSP / generated sources
 # -------------------------------
 **/kapt*/
 **/ksp*/
 **/generated/
 
 # -------------------------------
-# 依存キャッシュ等
+# Dependency caches, etc.
 # -------------------------------
 .caches/
 .cache/
 node_modules/
 
 # -------------------------------
-# リリース補助
+# Release helpers
 # -------------------------------
 fastlane/report.xml
 fastlane/Preview.html
@@ -115,19 +115,19 @@ fastlane/test_output
 RELEASE_NOTES*.md
 
 # -------------------------------
-# ★ モデル / 大容量アセット（litertlm含む）完全除外
-#   - 代表的拡張子を網羅
-#   - どの階層の models/ でも除外
-#   - assets/models/ も除外（空ディレクトリ維持は .keep を使う）
+# ★ Models / large assets (including LiteRT/LLM) — EXCLUDE COMPLETELY
+#   - Covers common extensions
+#   - Excludes any directory named "models/" at any depth
+#   - Excludes assets/models/ (use a placeholder file like .keep to retain the empty dir)
 # -------------------------------
-# ディレクトリ除外
+# Directories
 models/**
 **/models/**
 app/src/main/assets/models/**
-# 例外：空ディレクトリ維持用
+# Exception: keep placeholder for empty directory
 !app/src/main/assets/models/.keep
 
-# 拡張子除外（LiteRT/LLM/ONNX/TFLite/他）
+# Extensions (LiteRT/LLM/ONNX/TFLite/etc.)
 *.litertlm
 *.task
 *.gguf
@@ -142,7 +142,7 @@ app/src/main/assets/models/**
 *.mlpackage
 
 # -------------------------------
-# その他一時/バックアップ
+# Other temp/backup files
 # -------------------------------
 *.swp
 *.swo

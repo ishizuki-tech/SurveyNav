@@ -28,7 +28,7 @@ class UploadRescheduleReceiver : BroadcastReceiver() {
             Intent.ACTION_BOOT_COMPLETED -> true
             Intent.ACTION_MY_PACKAGE_REPLACED -> true
             // Support direct-boot delivery when declared as directBootAware in the manifest (N+)
-            "android.intent.action.LOCKED_BOOT_COMPLETED" -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+            "android.intent.action.LOCKED_BOOT_COMPLETED" -> true
             else -> false
         }
         if (!handled) return

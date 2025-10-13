@@ -166,6 +166,7 @@ fun InitGate(
             }
         }
     }
+
     LaunchedEffect(key) { kick() }
 
     val backplate = animatedBackplate()
@@ -184,9 +185,7 @@ fun InitGate(
                     shadowElevation = 8.dp,
                     shape = MaterialTheme.shapes.large,
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
-                    modifier = Modifier
-                        .wrapContentWidth()
-                        .neonEdgeThin()
+                    modifier = Modifier.wrapContentWidth().neonEdgeThin()
                 ) {
                     Column(
                         Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
@@ -312,14 +311,11 @@ fun AppNav() {
             DisposableEffect(slmModel) {
                 onDispose { runCatching { SLM.cleanUp(slmModel) { } } }
             }
-
             val backStack = rememberNavBackStack(FlowHome)
-
             // Repo to talk to SLM
             val repo: Repository = remember(appContext, slmModel, config) {
                 SlmDirectRepository(slmModel, config)
             }
-
             // VMs
             val vmSurvey: SurveyViewModel = viewModel(factory = object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
@@ -329,9 +325,8 @@ fun AppNav() {
             val vmAI: AiViewModel = viewModel(factory = object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    AiViewModel(repo) as T
+                    AiViewModel(repo,slmModel) as T
             })
-
             SurveyNavHost(vmSurvey, vmAI, backStack)
         }
     }
@@ -407,6 +402,7 @@ fun SurveyNavHost(
                     onRestart = { vmSurvey.resetToStart() },
                     gitHubConfig = gh
                 )
+
             }
         }
     )

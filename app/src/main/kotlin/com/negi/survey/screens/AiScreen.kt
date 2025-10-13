@@ -2,6 +2,15 @@
 package com.negi.survey.screens
 
 import android.annotation.SuppressLint
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -23,6 +32,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,6 +48,7 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
@@ -45,6 +57,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.negi.survey.slm.FollowupExtractor.extractScore
 import com.negi.survey.vm.AiViewModel
 import com.negi.survey.vm.SurveyViewModel
@@ -58,60 +71,8 @@ import kotlin.collections.ArrayDeque
 
 /* =============================================================================
  * AI Evaluation Screen — Modern × Monotone × Chic
- *
- * Visual design:
- *  - Monotone animated background (black → dark grays), zero chroma.
- *  - Ultra-slim glass chat bubbles with neutral gradient fills and micro-tails.
- *  - Subtle neutral edge (sweep gray rim), low alpha to avoid visual weight.
- *  - Compact JSON bubble with neutral header and copy action.
- *
- * Architecture:
- *  - Preserves existing VM contracts and behavior (AiViewModel / SurveyViewModel).
- *  - Stateless composables except for local UI state (expand/collapse).
- *  - No reliance on experimental APIs beyond Material3 annotations currently used.
- *
- * Performance:
- *  - Single rememberInfiniteTransition per animated piece (cheap, GPU-friendly).
- *  - Decorations via drawBehind; avoids extra composable layers.
- *  - JSON selection only when expanded; saves layout/measure cost.
  * =============================================================================
  */
-
-/* ───────────────────────────────── App Bar ───────────────────────────────── */
-
-@Composable
-private fun CompactTopBar(
-    title: String,
-    height: Dp = 32.dp
-) {
-    val cs = MaterialTheme.colorScheme
-    val topBrush = Brush.horizontalGradient(
-        listOf(
-            cs.surface.copy(alpha = 0.96f),
-            Color(0xFF1A1A1A).copy(alpha = 0.75f)
-        )
-    )
-    Surface(color = Color.Transparent, tonalElevation = 0.dp) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(topBrush)
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .height(height)
-                .padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                color = cs.onSurface
-            )
-        }
-    }
-}
-
-/* ───────────────────────────────── Screen ───────────────────────────────── */
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalSerializationApi::class)
 @Composable
@@ -122,6 +83,7 @@ fun AiScreen(
     onNext: () -> Unit,
     onBack: () -> Unit
 ) {
+    val context = LocalContext.current
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
@@ -146,6 +108,127 @@ fun AiScreen(
     var composer by remember(nodeId) { mutableStateOf(vmSurvey.getAnswer(nodeId)) }
     val focusRequester = remember { FocusRequester() }
     val scroll = rememberScrollState()
+
+    // ---- helpers to avoid stale capture inside long-lived callbacks ----
+    val loadingLatest by rememberUpdatedState(loading)
+    val submitLatest by rememberUpdatedState(newValue = {
+        // keep IME open; do not hide keyboard here
+        val answer = composer.trim()
+        if (answer.isBlank() || loadingLatest) return@rememberUpdatedState
+        vmSurvey.setAnswer(answer, nodeId)
+        vmSurvey.answerLastFollowup(nodeId, answer)
+
+        vmAI.chatAppend(
+            nodeId,
+            AiViewModel.ChatMsgVm(
+                id = "u-$nodeId-${System.nanoTime()}",
+                sender = AiViewModel.ChatSender.USER,
+                text = answer
+            )
+        )
+        scope.launch {
+            val q = vmSurvey.getQuestion(nodeId)
+            val prompt = vmSurvey.getPrompt(nodeId, q, answer)
+            vmAI.evaluateAsync(prompt)
+        }
+        composer = ""
+    })
+    val setComposerLatest by rememberUpdatedState(newValue = { s: String -> composer = s })
+
+    // ───── Speech recognition wiring ─────
+    val speechRecognizer = remember {
+        if (SpeechRecognizer.isRecognitionAvailable(context))
+            SpeechRecognizer.createSpeechRecognizer(context)
+        else null
+    }
+    var micRecording by remember { mutableStateOf(false) }
+
+    fun mapSpeechError(code: Int): String = when (code) {
+        SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
+        SpeechRecognizer.ERROR_CLIENT -> "Client error"
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Insufficient permissions"
+        SpeechRecognizer.ERROR_NETWORK -> "Network error"
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
+        SpeechRecognizer.ERROR_NO_MATCH -> "No match"
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy"
+        SpeechRecognizer.ERROR_SERVER -> "Server error"
+        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Speech timeout"
+        else -> "Unknown error ($code)"
+    }
+
+    fun startStt() {
+        if (speechRecognizer == null) {
+            scope.launch { snack.showSnackbar("Speech recognition is not available on this device") }
+            return
+        }
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            // Optionally force locale: putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ja-JP")
+            // Optionally prefer offline: putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+        }
+        speechRecognizer.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) { micRecording = true }
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+
+            override fun onError(error: Int) {
+                micRecording = false
+                scope.launch { snack.showSnackbar(mapSpeechError(error)) }
+            }
+
+            override fun onPartialResults(partialResults: Bundle?) {
+                val list = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                val partial = list?.firstOrNull()
+                if (!partial.isNullOrBlank() && !loadingLatest) {
+                    setComposerLatest(partial)
+                }
+            }
+
+            override fun onResults(results: Bundle?) {
+                micRecording = false
+                val best = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull().orEmpty()
+                if (best.isNotBlank()) {
+                    setComposerLatest(best)
+                    submitLatest()
+                }
+            }
+
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        })
+        // start (if already listening somehow, cancel first to avoid busy state)
+        try {
+            speechRecognizer.cancel()
+        } catch (_: Throwable) { /* no-op */ }
+        micRecording = true
+        speechRecognizer.startListening(intent)
+    }
+
+    fun stopStt() {
+        micRecording = false
+        // stop gracefully; cancel ensures immediate abort if needed
+        runCatching { speechRecognizer?.stopListening() }
+        runCatching { speechRecognizer?.cancel() }
+    }
+
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) startStt()
+        else scope.launch { snack.showSnackbar("Microphone permission denied") }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            runCatching { speechRecognizer?.cancel() }
+            speechRecognizer?.destroy()
+        }
+    }
+    // ───── end Speech recognition wiring ─────
 
     // Seed the first question and focus composer (IME kept open)
     LaunchedEffect(nodeId, question) {
@@ -228,38 +311,12 @@ fun AiScreen(
         }
     }
 
-    // Submit current answer (keeps IME open)
-    fun submit() {
-        val answer = composer.trim()
-        if (answer.isBlank() || loading) return
-        vmSurvey.setAnswer(answer, nodeId)
-        vmSurvey.answerLastFollowup(nodeId, answer)
-
-        vmAI.chatAppend(
-            nodeId,
-            AiViewModel.ChatMsgVm(
-                id = "u-$nodeId-${System.nanoTime()}",
-                sender = AiViewModel.ChatSender.USER,
-                text = answer
-            )
-        )
-
-        scope.launch {
-            val q = vmSurvey.getQuestion(nodeId)
-            val prompt = vmSurvey.getPrompt(nodeId, q, answer)
-            vmAI.evaluateAsync(prompt)
-        }
-
-        composer = ""
-    }
-
     // Animated monotone background brush
     val bgBrush = animatedMonotoneBackplate()
 
     Scaffold(
         topBar = { CompactTopBar(title = "Question • $nodeId") },
         snackbarHost = { SnackbarHost(snack) },
-        // Root does not follow IME; only the composer does.
         contentWindowInsets = WindowInsets(0),
         bottomBar = {
             Surface(
@@ -280,9 +337,21 @@ fun AiScreen(
                             composer = it
                             vmSurvey.setAnswer(it, nodeId)
                         },
-                        onSend = ::submit,
+                        onSend = { submitLatest() },
                         enabled = !loading,
-                        focusRequester = focusRequester
+                        focusRequester = focusRequester,
+                        onMicClick = {
+                            if (micRecording) {
+                                stopStt()
+                            } else {
+                                val granted = ContextCompat.checkSelfPermission(
+                                    context, Manifest.permission.RECORD_AUDIO
+                                ) == PackageManager.PERMISSION_GRANTED
+                                if (granted) startStt()
+                                else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        },
+                        micRecording = micRecording
                     )
                     HorizontalDivider(Modifier, DividerDefaults.Thickness, DividerDefaults.color)
                     Row(
@@ -359,17 +428,42 @@ fun AiScreen(
     }
 }
 
+/* ───────────────────────────────── App Bar ───────────────────────────────── */
+
+@Composable
+private fun CompactTopBar(
+    title: String,
+    height: Dp = 32.dp
+) {
+    val cs = MaterialTheme.colorScheme
+    val topBrush = Brush.horizontalGradient(
+        listOf(
+            cs.surface.copy(alpha = 0.96f),
+            Color(0xFF1A1A1A).copy(alpha = 0.75f)
+        )
+    )
+    Surface(color = Color.Transparent, tonalElevation = 0.dp) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(topBrush)
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .height(height)
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                color = cs.onSurface
+            )
+        }
+    }
+}
+
 /* ───────────────────────────── Chat bubbles ─────────────────────────────── */
 
-/**
- * Ultra-slim monotone bubble with micro-tail. Two variants:
- *  - AI: darker neutral gradient, tail on left.
- *  - User: lighter neutral gradient, tail on right.
- *
- * Implementation details:
- *  - All fills/edges are grayscale; we use low-alpha strokes and a soft
- *    radial glow for depth instead of heavy shadows.
- */
 @Composable
 private fun BubbleMono(
     text: String,
@@ -385,13 +479,11 @@ private fun BubbleMono(
     val tailW = 7f
     val tailH = 6f
 
-    // Neutral gradients (strict grayscale). AI is darker; User is lighter.
     val stops = if (isAi)
         listOf(Color(0xFF111111), Color(0xFF1E1E1E), Color(0xFF2A2A2A))
     else
         listOf(Color(0xFFEDEDED), Color(0xFFD9D9D9), Color(0xFFC8C8C8))
 
-    // Tiny motion to keep the surface “alive” while staying subtle.
     val t = rememberInfiniteTransition(label = "bubble-mono")
     val p by t.animateFloat(
         0f, 1f,
@@ -459,7 +551,6 @@ private fun BubbleMono(
     }
 }
 
-/* Three animated dots with phase-shifted alpha wave (single animator). */
 @Composable
 private fun TypingDots(color: Color) {
     val t = rememberInfiniteTransition(label = "typing")
@@ -476,11 +567,6 @@ private fun TypingDots(color: Color) {
 
 /* ───────────────────────────── JSON bubble ──────────────────────────────── */
 
-/**
- * Compact JSON bubble with neutral header and copy action.
- * - Collapsed mode shows a tiny preview stub, keeping the feed readable.
- * - Expanded mode uses a monospaced font with horizontal scroll for wide JSON.
- */
 @Composable
 private fun JsonBubbleMono(
     pretty: String,
@@ -507,7 +593,6 @@ private fun JsonBubbleMono(
             }
     ) {
         Column {
-            // Neutral header gradient (dark → light gray), very low contrast
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -572,17 +657,15 @@ private fun JsonBubbleMono(
 
 /* ───────────────────────────── Composer ─────────────────────────────────── */
 
-/**
- * Slim glass composer that follows IME.
- * - Uses only neutral tones; a thin neutral rim aligns with the overall style.
- */
 @Composable
 private fun ChatComposer(
     value: String,
     onValueChange: (String) -> Unit,
     onSend: () -> Unit,
     enabled: Boolean,
-    focusRequester: FocusRequester
+    focusRequester: FocusRequester,
+    onMicClick: () -> Unit,
+    micRecording: Boolean = false
 ) {
     val cs = MaterialTheme.colorScheme
     Column(
@@ -625,6 +708,20 @@ private fun ChatComposer(
                 ),
                 textStyle = MaterialTheme.typography.bodyMedium
             )
+
+            // Mic button (toggle)
+            IconButton(
+                onClick = onMicClick,
+                enabled = enabled,
+                modifier = Modifier.size(40.dp)
+            ) {
+                if (micRecording) {
+                    Icon(Icons.Outlined.Stop, contentDescription = "Stop recording")
+                } else {
+                    Icon(Icons.Outlined.Mic, contentDescription = "Start recording")
+                }
+            }
+
             FilledTonalButton(
                 onClick = onSend,
                 enabled = enabled && value.isNotBlank(),
@@ -639,11 +736,6 @@ private fun ChatComposer(
 
 /* ─────────────────────────── Visual utilities ───────────────────────────── */
 
-/**
- * Animated monotone background.
- * - Strict grayscale stops blended with theme.surface for dynamic color harmony.
- * - End vector slowly drifts; no hue changes, only luminance motion.
- */
 @Composable
 private fun animatedMonotoneBackplate(): Brush {
     val cs = MaterialTheme.colorScheme
@@ -673,12 +765,7 @@ private fun animatedMonotoneBackplate(): Brush {
 }
 
 /**
- * Neutral rim edge for surfaces (sweep gray). Kept extremely light to avoid
- * the “thick border” look; intended as a premium polish rather than framing.
- *
- * @param alpha Overall opacity of the rim.
- * @param corner Corner radius to match the decorated container.
- * @param stroke Stroke width in dp (keep small, e.g., 0.8–1.2dp).
+ * Neutral rim edge (very subtle sweep gradient).
  */
 @Composable
 private fun Modifier.neutralEdge(
@@ -821,7 +908,9 @@ private fun ChatPreview() {
                 onValueChange = {},
                 onSend = {},
                 enabled = true,
-                focusRequester = FocusRequester()
+                focusRequester = FocusRequester(),
+                onMicClick = {},
+                micRecording = false
             )
         }
     }
