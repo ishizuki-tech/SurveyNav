@@ -165,7 +165,7 @@ open class AiViewModelSurveyBase {
 
         // 4) Wire repo & VM
         repo = SlmDirectRepository(model, config)
-        vm = AiViewModel(repo, timeout_ms = VM_TIMEOUT_SEC * 1000L)
+        vm = AiViewModel(repo, model, timeout_ms = VM_TIMEOUT_SEC * 1000L)
 
         runCatching { Assert.assertFalse("SLM should be idle on start", SLM.isBusy(model)) }
             .onFailure { Logx.w(TAG, "SLM.isBusy check failed: ${it.message}") }

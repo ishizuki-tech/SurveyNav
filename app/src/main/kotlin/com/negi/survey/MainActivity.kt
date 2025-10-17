@@ -5,6 +5,7 @@ package com.negi.survey
 
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
@@ -39,22 +40,18 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
-import androidx.navigation3.runtime.rememberSavedStateNavEntryDecorator
-import androidx.navigation3.scene.rememberSceneSetupNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import com.negi.survey.config.SurveyConfig
 import com.negi.survey.config.SurveyConfigLoader
-import com.negi.survey.net.GitHubConfig
+import com.negi.survey.net.GitHubUploader
 import com.negi.survey.screens.AiScreen
 import com.negi.survey.screens.DoneScreen
 import com.negi.survey.screens.IntroScreen
 import com.negi.survey.screens.ReviewScreen
-import com.negi.survey.screens.UploadProgressOverlay
 import com.negi.survey.slm.ConfigKey
 import com.negi.survey.slm.Model
 import com.negi.survey.slm.Repository
@@ -70,9 +67,12 @@ import com.negi.survey.vm.FlowHome
 import com.negi.survey.vm.FlowReview
 import com.negi.survey.vm.FlowText
 import com.negi.survey.vm.SurveyViewModel
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -108,6 +108,124 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/* ───────────────────────────── SLM Process-Scoped Keeper ───────────────────────────── */
+/**
+ * Process-scoped, idempotent, and single-flight initializer for SLM.
+ * - Keeps SLM alive for the whole process lifetime (no cleanup on background).
+ * - Prevents duplicate initialization even under concurrent calls.
+ * - Explicit cleanup is available for true process teardown.
+ */
+object SlmKeeper {
+    private val mutex = Mutex()
+
+    @Volatile private var initializedModel: Model? = null
+    @Volatile private var initialized: Boolean = false
+    @Volatile private var lastError: Throwable? = null
+
+    // Single-flight handle: concurrent callers await the same init result.
+    @Volatile private var inFlightInit: CompletableDeferred<Unit>? = null
+
+    private const val TAG = "SlmKeeper"
+
+    /** Returns true if this process already holds SLM for the same model path. */
+    fun isInitializedFor(model: Model): Boolean =
+        initialized && initializedModel?.taskPath == model.taskPath
+
+    /** Debug helper. */
+    fun currentModelPath(): String? = initializedModel?.taskPath
+
+    /**
+     * Idempotent ensure-initialize with single-flight:
+     * - If already initialized for `model` → returns immediately.
+     * - If another call is initializing → await it.
+     * - Only one real SLM.initialize() runs at a time.
+     * - Hot-swap of different model paths is disallowed (opt-in via explicit cleanup).
+     */
+    suspend fun ensureInitialized(appContext: android.content.Context, model: Model) {
+        // Fast path: already ready
+        if (isInitializedFor(model)) return
+
+        // If there is a pending init, await it without taking the lock.
+        inFlightInit?.let { inflight ->
+            try {
+                inflight.await()
+                if (isInitializedFor(model)) return
+            } catch (_: Throwable) {
+                // Fallthrough to a fresh attempt under lock
+            }
+        }
+
+        mutex.withLock {
+            // Double-check under the lock
+            if (isInitializedFor(model)) return
+
+            // Disallow hot-swap to another model unless cleaned up explicitly.
+            if (initialized && initializedModel?.taskPath != model.taskPath) {
+                throw IllegalStateException(
+                    "SLM is initialized for ${initializedModel?.taskPath}. " +
+                            "Hot-swap is disabled. Call cleanUpIfInitialized() before switching models."
+                )
+            }
+
+            // Await any init that started between the first check and now
+            inFlightInit?.let { pending ->
+                try {
+                    pending.await()
+                    if (isInitializedFor(model)) return
+                } catch (_: Throwable) {
+                    // We'll retry below
+                }
+            }
+
+            // Create our single-flight token
+            val singleFlight = CompletableDeferred<Unit>().also { inFlightInit = it }
+
+            try {
+                withContext(Dispatchers.Default) {
+                    suspendCancellableCoroutine { cont ->
+                        SLM.initialize(appContext, model) { err ->
+                            if (err.isEmpty()) {
+                                initializedModel = model
+                                initialized = true
+                                lastError = null
+                                Log.i(TAG, "SLM initialized for ${model.taskPath}")
+                                cont.resume(Unit)
+                            } else {
+                                lastError = IllegalStateException(err)
+                                Log.e(TAG, "SLM init failed: $err")
+                                cont.resumeWithException(lastError!!)
+                            }
+                        }
+                    }
+                }
+                singleFlight.complete(Unit)
+            } catch (t: Throwable) {
+                singleFlight.completeExceptionally(t)
+                throw t
+            } finally {
+                // Clear only if this is still the active singleFlight marker
+                if (inFlightInit === singleFlight) inFlightInit = null
+            }
+        }
+    }
+
+    /**
+     * Explicit cleanup for true process teardown.
+     * Not used for normal backgrounding; call this from your Application onTerminate or similar.
+     */
+    suspend fun cleanUpIfInitialized() {
+        mutex.withLock {
+            val m = initializedModel ?: return
+            runCatching {
+                withContext(Dispatchers.Default) { SLM.cleanUp(m) { } }
+            }
+            Log.i(TAG, "SLM cleaned up for ${m.taskPath}")
+            initialized = false
+            initializedModel = null
+        }
+    }
+}
+
 /* ───────────────────────────── Visual Utilities ───────────────────────────── */
 
 @Composable
@@ -138,7 +256,10 @@ private fun Modifier.neonEdgeThin(
 )
 
 /* ───────────────────────────── Init Gate ───────────────────────────── */
-
+/**
+ * Simple loading/try-again wrapper for async init.
+ * NOTE: We skip showing this entirely if SLM is already initialized for the model.
+ */
 @Composable
 fun InitGate(
     modifier: Modifier = Modifier,
@@ -282,7 +403,7 @@ fun AppNav() {
             SurveyConfigLoader.fromAssets(appContext, "survey_config1.yaml")
         }
 
-        // 2) Build model config
+        // 2) Build model config (Gemma 2 friendly defaults; config overrides if provided)
         val modelConfig = remember(config) { buildModelConfig(config.slm) }
 
         // 3) Create SLM model descriptor
@@ -290,33 +411,14 @@ fun AppNav() {
             Model(name = "gemma-3n-E4B-it", taskPath = modelFile.absolutePath, config = modelConfig)
         }
 
-        // 4) Initialize SLM under gate
-        InitGate(
-            key = slmModel,
-            progressText = "Initializing Small Language Model…",
-            subText = "Setting up accelerated runtime and buffers",
-            onErrorMessage = { "Failed to initialize model: ${it.message}" },
-            init = {
-                withContext(Dispatchers.Default) {
-                    suspendCancellableCoroutine { cont ->
-                        SLM.initialize(appContext, slmModel) { err ->
-                            if (err.isEmpty()) cont.resume(Unit)
-                            else cont.resumeWithException(IllegalStateException(err))
-                        }
-                    }
-                }
-            }
-        ) {
-            // Cleanup on dispose
-            DisposableEffect(slmModel) {
-                onDispose { runCatching { SLM.cleanUp(slmModel) { } } }
-            }
+        // 4) If SLM already initialized for this model, render immediately to avoid spinner.
+        val alreadyReady = SlmKeeper.isInitializedFor(slmModel)
+
+        if (alreadyReady) {
             val backStack = rememberNavBackStack(FlowHome)
-            // Repo to talk to SLM
             val repo: Repository = remember(appContext, slmModel, config) {
                 SlmDirectRepository(slmModel, config)
             }
-            // VMs
             val vmSurvey: SurveyViewModel = viewModel(factory = object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
@@ -325,16 +427,41 @@ fun AppNav() {
             val vmAI: AiViewModel = viewModel(factory = object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    AiViewModel(repo,slmModel) as T
+                    AiViewModel(repo, slmModel) as T
             })
             SurveyNavHost(vmSurvey, vmAI, backStack)
+        } else {
+            // Otherwise, show InitGate exactly once (single-flight init under the hood).
+            InitGate(
+                key = slmModel.taskPath, // stable key prevents unnecessary re-inits
+                progressText = "Initializing Small Language Model…",
+                subText = "Setting up accelerated runtime and buffers",
+                onErrorMessage = { "Failed to initialize model: ${it.message}" },
+                init = { SlmKeeper.ensureInitialized(appContext, slmModel) }
+            ) {
+                val backStack = rememberNavBackStack(FlowHome)
+                val repo: Repository = remember(appContext, slmModel, config) {
+                    SlmDirectRepository(slmModel, config)
+                }
+                val vmSurvey: SurveyViewModel = viewModel(factory = object : ViewModelProvider.Factory {
+                    @Suppress("UNCHECKED_CAST")
+                    override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                        SurveyViewModel(nav = backStack, config = config) as T
+                })
+                val vmAI: AiViewModel = viewModel(factory = object : ViewModelProvider.Factory {
+                    @Suppress("UNCHECKED_CAST")
+                    override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                        AiViewModel(repo, slmModel) as T
+                })
+                SurveyNavHost(vmSurvey, vmAI, backStack)
+            }
         }
     }
 }
 
 /**
  * Survey flow host.
- * NOTE: imePadding() は子のコンポーザーでのみ適用（ルートを跳ねさせない）。
+ * NOTE: imePadding() is applied only inside children to avoid shifting the root.
  */
 @Composable
 fun SurveyNavHost(
@@ -342,15 +469,10 @@ fun SurveyNavHost(
     vmAI: AiViewModel,
     backStack: NavBackStack<NavKey>
 ) {
-    UploadProgressOverlay()
+    // UploadProgressOverlay() // if/when used
 
     NavDisplay(
         backStack = backStack,
-        entryDecorators = listOf(
-            rememberSceneSetupNavEntryDecorator(),
-            rememberSavedStateNavEntryDecorator(),
-            rememberViewModelStoreNavEntryDecorator()
-        ),
         entryProvider = entryProvider {
             entry<FlowHome> {
                 IntroScreen(
@@ -389,7 +511,7 @@ fun SurveyNavHost(
             }
             entry<FlowDone> {
                 val gh = if (BuildConfig.GH_TOKEN.isNotEmpty()) {
-                    GitHubConfig(
+                    GitHubUploader.GitHubConfig(
                         owner = BuildConfig.GH_OWNER,
                         repo = BuildConfig.GH_REPO,
                         branch = BuildConfig.GH_BRANCH,
@@ -402,7 +524,6 @@ fun SurveyNavHost(
                     onRestart = { vmSurvey.resetToStart() },
                     gitHubConfig = gh
                 )
-
             }
         }
     )
@@ -416,12 +537,13 @@ fun SurveyNavHost(
 /* ───────────────────────────── SLM Config Helpers ────────────────────────── */
 
 private fun buildModelConfig(slm: SurveyConfig.SlmMeta): MutableMap<ConfigKey, Any> {
+    // Gemma 2 friendly defaults; user config overrides if provided.
     val out = mutableMapOf<ConfigKey, Any>(
         ConfigKey.ACCELERATOR to ((slm.accelerator ?: "GPU").uppercase()),
         ConfigKey.MAX_TOKENS  to (slm.maxTokens ?: 512),
-        ConfigKey.TOP_K       to (slm.topK ?: 1),
-        ConfigKey.TOP_P       to (slm.topP ?: 0.0),
-        ConfigKey.TEMPERATURE to (slm.temperature ?: 0.0)
+        ConfigKey.TOP_K       to (slm.topK ?: 40),       // more typical for Gemma 2
+        ConfigKey.TOP_P       to (slm.topP ?: 0.95),     // nucleus sampling
+        ConfigKey.TEMPERATURE to (slm.temperature ?: 0.7)
     )
     normalizeNumberTypes(out)
     clampRanges(out)
@@ -430,9 +552,9 @@ private fun buildModelConfig(slm: SurveyConfig.SlmMeta): MutableMap<ConfigKey, A
 
 private fun normalizeNumberTypes(m: MutableMap<ConfigKey, Any>) {
     m[ConfigKey.MAX_TOKENS]  = (m[ConfigKey.MAX_TOKENS] as? Number)?.toInt() ?: 256
-    m[ConfigKey.TOP_K]       = (m[ConfigKey.TOP_K] as? Number)?.toInt() ?: 1
-    m[ConfigKey.TOP_P]       = (m[ConfigKey.TOP_P] as? Number)?.toDouble() ?: 0.0
-    m[ConfigKey.TEMPERATURE] = (m[ConfigKey.TEMPERATURE] as? Number)?.toDouble() ?: 0.0
+    m[ConfigKey.TOP_K]       = (m[ConfigKey.TOP_K] as? Number)?.toInt() ?: 40
+    m[ConfigKey.TOP_P]       = (m[ConfigKey.TOP_P] as? Number)?.toDouble() ?: 0.95
+    m[ConfigKey.TEMPERATURE] = (m[ConfigKey.TEMPERATURE] as? Number)?.toDouble() ?: 0.7
 }
 
 private fun clampRanges(m: MutableMap<ConfigKey, Any>) {

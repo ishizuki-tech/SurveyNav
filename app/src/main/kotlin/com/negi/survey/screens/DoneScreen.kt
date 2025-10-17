@@ -35,18 +35,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.negi.survey.net.GitHubConfig
-import com.negi.survey.net.GitHubUploader
 import com.negi.survey.net.GitHubUploadWorker
+import com.negi.survey.net.GitHubUploader
 import com.negi.survey.vm.SurveyViewModel
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 
 /**
@@ -67,7 +62,7 @@ import java.io.File
 fun DoneScreen(
     vm: SurveyViewModel,
     onRestart: () -> Unit,
-    gitHubConfig: GitHubConfig? = null,   // enable upload buttons when non-null
+    gitHubConfig: GitHubUploader.GitHubConfig? = null,   // enable upload buttons when non-null
     autoSaveToDevice: Boolean = false     // save once automatically on first composition
 ) {
     val questions by vm.questions.collectAsState(initial = emptyMap())
@@ -127,7 +122,11 @@ fun DoneScreen(
             val fileName = "survey_${System.currentTimeMillis()}.json"
             runCatching {
                 val result = withContext(Dispatchers.IO) {
-                    saveJsonAutomatically(context = context, fileName = fileName, content = jsonText)
+                    saveJsonAutomatically(
+                        context = context,
+                        fileName = fileName,
+                        content = jsonText
+                    )
                 }
                 autoSavedOnce.value = true
                 snackbar.showOnce("Saved to device: ${result.location}")
@@ -149,7 +148,10 @@ fun DoneScreen(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
         ) {
-            Text("Thanks! Here is your response summary.", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "Thanks! Here is your response summary.",
+                style = MaterialTheme.typography.bodyLarge
+            )
             Spacer(Modifier.height(16.dp))
 
             // Answers
@@ -193,7 +195,10 @@ fun DoneScreen(
                         Text("Owner node: $ownerId", style = MaterialTheme.typography.labelLarge)
                         Spacer(Modifier.height(6.dp))
                         list.forEachIndexed { idx, fu ->
-                            Text("${idx + 1}. ${fu.question}", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "${idx + 1}. ${fu.question}",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
                             val ans = fu.answer
                             if (!ans.isNullOrBlank()) {
                                 Spacer(Modifier.height(2.dp))

@@ -85,13 +85,13 @@ fun IntroScreen(
             .testTag("IntroScreenRoot")
     ) {
         // Top system bar strip: paint exact status bar height in pure black.
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .windowInsetsTopHeight(WindowInsets.statusBars)
-                .fillMaxSize()
-                .background(Color.Black)
-        )
+//        Box(
+//            modifier = Modifier
+//                .align(Alignment.TopStart)
+//                .windowInsetsTopHeight(WindowInsets.statusBars)
+//                .fillMaxSize()
+//                .background(Color.Black)
+//        )
 
         // Center content layer: the hero card.
         Box(
@@ -105,14 +105,14 @@ fun IntroScreen(
             )
         }
 
-        // Bottom system bar strip: paint exact navigation bar height in pure black.
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .windowInsetsBottomHeight(WindowInsets.navigationBars)
-                .fillMaxSize()
-                .background(Color.Black)
-        )
+//        // Bottom system bar strip: paint exact navigation bar height in pure black.
+//        Box(
+//            modifier = Modifier
+//                .align(Alignment.BottomStart)
+//                .windowInsetsBottomHeight(WindowInsets.navigationBars)
+//                .fillMaxSize()
+//                .background(Color.Black)
+//        )
     }
 }
 

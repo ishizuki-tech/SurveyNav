@@ -87,8 +87,8 @@ class AiViewModelInstrumentationTest {
                 assertNotNull("Model instance must exist", model.instance)
             }
 
-            repo = SlmDirectRepository(model,config)
-            vm = AiViewModel(repo, timeout_ms = TIMEOUT_SEC * 1000)
+            repo = SlmDirectRepository(model, config)
+            vm = AiViewModel(repo, model, timeout_ms = TIMEOUT_SEC * 1000)
 
             runCatching { assertFalse("busy should be false at test start", SLM.isBusy(model)) }
         }

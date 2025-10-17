@@ -17,34 +17,6 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Immutable configuration for GitHub uploads.
- *
- * @property owner       The repository owner (user or organization).
- * @property repo        The repository name.
- * @property token       A Personal Access Token (classic or fine-grained) with "contents:write" scope.
- * @property branch      Target branch to commit into. Defaults to "main".
- * @property pathPrefix  Base directory inside the repository where files are written (no leading/trailing slash needed).
- */
-data class GitHubConfig(
-    val owner: String,
-    val repo: String,
-    val token: String,
-    val branch: String = "main",
-    val pathPrefix: String = "exports"
-)
-
-/**
- * Result of an upload attempt returned by the high-level API.
- *
- * @property fileUrl   HTML web URL of the created/updated file (null on failure or if absent).
- * @property commitSha Commit SHA of the write operation (null on failure or if absent).
- */
-data class UploadResult(
-    val fileUrl: String?,
-    val commitSha: String?
-)
-
-/**
  * High-level helper for GitHub "Create or update file contents" REST API.
  *
  * Design goals:
@@ -59,6 +31,34 @@ data class UploadResult(
  * https://docs.github.com/rest/repos/contents#create-or-update-file-contents
  */
 object GitHubUploader {
+
+    /**
+     * Immutable configuration for GitHub uploads.
+     *
+     * @property owner       The repository owner (user or organization).
+     * @property repo        The repository name.
+     * @property token       A Personal Access Token (classic or fine-grained) with "contents:write" scope.
+     * @property branch      Target branch to commit into. Defaults to "main".
+     * @property pathPrefix  Base directory inside the repository where files are written (no leading/trailing slash needed).
+     */
+    data class GitHubConfig(
+        val owner: String,
+        val repo: String,
+        val token: String,
+        val branch: String = "main",
+        val pathPrefix: String = "exports"
+    )
+
+    /**
+     * Result of an upload attempt returned by the high-level API.
+     *
+     * @property fileUrl   HTML web URL of the created/updated file (null on failure or if absent).
+     * @property commitSha Commit SHA of the write operation (null on failure or if absent).
+     */
+    data class UploadResult(
+        val fileUrl: String?,
+        val commitSha: String?
+    )
 
     // ------------------------------------------------------------
     // Public APIs (preferred overloads)

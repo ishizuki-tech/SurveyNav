@@ -21,7 +21,6 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.coroutines.coroutineContext // IMPORTANT: required for anchor scope creation
 
 /**
  * Repository that streams inference results from an on-device SLM.
@@ -32,10 +31,6 @@ import kotlin.coroutines.coroutineContext // IMPORTANT: required for anchor scop
  * - Robust lifecycle: finished flag, onClean observer, idle-grace & watchdog
  * - Defensive cleanup (cancel/reset) on abnormal paths
  */
-interface Repository {
-    suspend fun request(prompt: String): Flow<String>
-    fun buildPrompt(userPrompt: String): String
-}
 
 class SlmDirectRepository(
     private val model: Model,
@@ -85,17 +80,17 @@ class SlmDirectRepository(
      */
     override fun buildPrompt(userPrompt: String): String {
         val slm = config.slm
-        val userTurn   = slm?.user_turn_prefix       ?: DEF_USER_TURN_PREFIX
-        val modelTurn  = slm?.model_turn_prefix      ?: DEF_MODEL_TURN_PREFIX
-        val turnEnd    = slm?.turn_end               ?: DEF_TURN_END
-        val emptyJson  = slm?.empty_json_instruction ?: DEF_EMPTY_JSON_INSTRUCTION
+        val userTurn   = slm.user_turn_prefix       ?: DEF_USER_TURN_PREFIX
+        val modelTurn  = slm.model_turn_prefix      ?: DEF_MODEL_TURN_PREFIX
+        val turnEnd    = slm.turn_end               ?: DEF_TURN_END
+        val emptyJson  = slm.empty_json_instruction ?: DEF_EMPTY_JSON_INSTRUCTION
 
         // System framing blocks (optional in YAML)
-        val preamble     = slm?.preamble      ?: DEF_PREAMBLE
-        val keyContract  = slm?.key_contract  ?: DEF_KEY_CONTRACT
-        val lengthBudget = slm?.length_budget ?: DEF_LENGTH_BUDGET
-        val scoringRule  = slm?.scoring_rule  ?: DEF_SCORING_RULE
-        val strictOutput = slm?.strict_output ?: DEF_STRICT_OUTPUT
+        val preamble     = slm.preamble      ?: DEF_PREAMBLE
+        val keyContract  = slm.key_contract  ?: DEF_KEY_CONTRACT
+        val lengthBudget = slm.length_budget ?: DEF_LENGTH_BUDGET
+        val scoringRule  = slm.scoring_rule  ?: DEF_SCORING_RULE
+        val strictOutput = slm.strict_output ?: DEF_STRICT_OUTPUT
 
         val effective = if (userPrompt.isBlank()) emptyJson else userPrompt.trimIndent().normalize()
 

@@ -43,9 +43,9 @@ class GitHubUploadWorker(
     @RequiresApi(Build.VERSION_CODES.Q)
     override suspend fun doWork(): Result {
         // --- Read & validate inputs (fail fast with clear semantics) ---
-        val cfg = GitHubConfig(
+        val cfg = GitHubUploader.GitHubConfig(
             owner = inputData.getString(KEY_OWNER).orEmpty(),
-            repo  = inputData.getString(KEY_REPO).orEmpty(),
+            repo = inputData.getString(KEY_REPO).orEmpty(),
             token = inputData.getString(KEY_TOKEN).orEmpty(),
             branch = inputData.getString(KEY_BRANCH).orEmpty(),
             pathPrefix = inputData.getString(KEY_PATH_PREFIX).orEmpty()
@@ -232,7 +232,7 @@ class GitHubUploadWorker(
          * - Requires network; uses expedited if quota permits, otherwise falls back.
          * - Applies exponential backoff for robust retries.
          */
-        fun enqueueExistingPayload(context: Context, cfg: GitHubConfig, file: File) {
+        fun enqueueExistingPayload(context: Context, cfg: GitHubUploader.GitHubConfig, file: File) {
             val fileName = file.name
             val req = OneTimeWorkRequestBuilder<GitHubUploadWorker>()
                 .setInputData(
@@ -271,7 +271,7 @@ class GitHubUploadWorker(
          */
         fun enqueue(
             context: Context,
-            cfg: GitHubConfig,
+            cfg: GitHubUploader.GitHubConfig,
             fileName: String,
             jsonContent: String
         ) {

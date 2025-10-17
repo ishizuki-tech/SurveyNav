@@ -34,7 +34,7 @@ class UploadRescheduleReceiver : BroadcastReceiver() {
         if (!handled) return
 
         // Build GitHub configuration from BuildConfig (project-provided)
-        val cfg = GitHubConfig(
+        val cfg = GitHubUploader.GitHubConfig(
             owner = BuildConfig.GH_OWNER,
             repo = BuildConfig.GH_REPO,
             token = BuildConfig.GH_TOKEN,

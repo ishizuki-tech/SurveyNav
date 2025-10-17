@@ -1,14 +1,15 @@
 // file: app/src/main/java/com/negi/survey/screens/AiScreen.kt
 package com.negi.survey.screens
 
-import android.annotation.SuppressLint
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
@@ -23,7 +24,25 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -34,24 +53,50 @@ import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Stop
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.outlined.VolumeOff
+import androidx.compose.material.icons.outlined.VolumeUp
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
@@ -67,10 +112,13 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
-import kotlin.collections.ArrayDeque
+import java.util.Locale
 
 /* =============================================================================
  * AI Evaluation Screen — Modern × Monotone × Chic
+ * - STT: SpeechRecognizer (partial → composer / final → submit)
+ * - TTS: TextToSpeech (reads AI text/follow-ups with mute toggle)
+ * - NEW: A small "speak" icon inside the question bubble (tap = speak, long-press = stop)
  * =============================================================================
  */
 
@@ -89,12 +137,12 @@ fun AiScreen(
     val scope = rememberCoroutineScope()
     val snack = remember { SnackbarHostState() }
 
-    // Survey state
+    // --- Survey state ---
     val question by remember(vmSurvey, nodeId) {
         vmSurvey.questions.map { it[nodeId].orEmpty() }
     }.collectAsState(initial = vmSurvey.getQuestion(nodeId))
 
-    // AI state
+    // --- AI state ---
     val loading by vmAI.loading.collectAsState()
     val stream by vmAI.stream.collectAsState()
     val raw by vmAI.raw.collectAsState()
@@ -104,15 +152,54 @@ fun AiScreen(
     // Chat list per node
     val chat by remember(nodeId) { vmAI.chatFlow(nodeId) }.collectAsState()
 
-    // Local state
+    // --- Local UI state ---
     var composer by remember(nodeId) { mutableStateOf(vmSurvey.getAnswer(nodeId)) }
     val focusRequester = remember { FocusRequester() }
     val scroll = rememberScrollState()
 
-    // ---- helpers to avoid stale capture inside long-lived callbacks ----
+    // ─────────────────────────── TTS (Text-to-Speech) ───────────────────────────
+    var tts by remember { mutableStateOf<TextToSpeech?>(null) }
+    var ttsReady by remember { mutableStateOf(false) }
+    var ttsMuted by remember { mutableStateOf(false) }
+    val preferredLocale = remember { Locale.getDefault() }
+
+    fun speak(text: String) {
+        // Use QUEUE_FLUSH to replace any ongoing utterance
+        if (!ttsReady || ttsMuted || text.isBlank()) return
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "ai-$nodeId-${System.nanoTime()}")
+    }
+
+    fun stopSpeak() {
+        tts?.stop()
+    }
+
+    LaunchedEffect(Unit) {
+        tts = TextToSpeech(context) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                val langResult = tts?.setLanguage(preferredLocale) ?: TextToSpeech.LANG_MISSING_DATA
+                ttsReady = langResult != TextToSpeech.LANG_MISSING_DATA && langResult != TextToSpeech.LANG_NOT_SUPPORTED
+                if (!ttsReady) {
+                    scope.launch { snack.showSnackbar("TTS language not supported: ${preferredLocale.displayName}") }
+                }
+            } else {
+                ttsReady = false
+                scope.launch { snack.showSnackbar("Failed to initialize TextToSpeech") }
+            }
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { tts?.stop(); tts?.shutdown() }
+    }
+
+    // Auto-speak follow-up when available
+    LaunchedEffect(followup, loading, ttsReady, ttsMuted) {
+        val fu = followup
+        if (fu != null && !loading && ttsReady && !ttsMuted) speak(fu)
+    }
+
+    // ───────── Helpers to avoid stale captures inside long-lived callbacks ─────────
     val loadingLatest by rememberUpdatedState(loading)
     val submitLatest by rememberUpdatedState(newValue = {
-        // keep IME open; do not hide keyboard here
         val answer = composer.trim()
         if (answer.isBlank() || loadingLatest) return@rememberUpdatedState
         vmSurvey.setAnswer(answer, nodeId)
@@ -135,7 +222,7 @@ fun AiScreen(
     })
     val setComposerLatest by rememberUpdatedState(newValue = { s: String -> composer = s })
 
-    // ───── Speech recognition wiring ─────
+    // ─────────────────────────── STT (SpeechRecognizer) ───────────────────────────
     val speechRecognizer = remember {
         if (SpeechRecognizer.isRecognitionAvailable(context))
             SpeechRecognizer.createSpeechRecognizer(context)
@@ -162,19 +249,24 @@ fun AiScreen(
             return
         }
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            // Optionally force locale: putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ja-JP")
-            // Optionally prefer offline: putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+            // putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ja-JP")
+            // putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         }
         speechRecognizer.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) { micRecording = true }
+            override fun onReadyForSpeech(params: Bundle?) {
+                micRecording = true
+            }
+
             override fun onBeginningOfSpeech() {}
             override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
-
             override fun onError(error: Int) {
                 micRecording = false
                 scope.launch { snack.showSnackbar(mapSpeechError(error)) }
@@ -183,9 +275,7 @@ fun AiScreen(
             override fun onPartialResults(partialResults: Bundle?) {
                 val list = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 val partial = list?.firstOrNull()
-                if (!partial.isNullOrBlank() && !loadingLatest) {
-                    setComposerLatest(partial)
-                }
+                if (!partial.isNullOrBlank() && !loadingLatest) setComposerLatest(partial)
             }
 
             override fun onResults(results: Bundle?) {
@@ -200,17 +290,13 @@ fun AiScreen(
 
             override fun onEvent(eventType: Int, params: Bundle?) {}
         })
-        // start (if already listening somehow, cancel first to avoid busy state)
-        try {
-            speechRecognizer.cancel()
-        } catch (_: Throwable) { /* no-op */ }
+        runCatching { speechRecognizer.cancel() }
         micRecording = true
         speechRecognizer.startListening(intent)
     }
 
     fun stopStt() {
         micRecording = false
-        // stop gracefully; cancel ensures immediate abort if needed
         runCatching { speechRecognizer?.stopListening() }
         runCatching { speechRecognizer?.cancel() }
     }
@@ -228,20 +314,20 @@ fun AiScreen(
             speechRecognizer?.destroy()
         }
     }
-    // ───── end Speech recognition wiring ─────
+    // ───────────── end STT ─────────────
 
-    // Seed the first question and focus composer (IME kept open)
+    // Seed the first question and focus composer (keep IME open)
     LaunchedEffect(nodeId, question) {
         vmAI.chatEnsureSeedQuestion(nodeId, question)
         focusRequester.requestFocus()
         keyboard?.show()
     }
-    // Keep composer text when returning to this screen
+    // Restore composer text when returning to this screen
     LaunchedEffect(nodeId) { composer = vmSurvey.getAnswer(nodeId) }
-    // Errors as snackbars
+    // Pipe error messages into Snackbar
     LaunchedEffect(error) { error?.let { snack.showSnackbar(it) } }
 
-    // Maintain/update typing bubble during streaming
+    // Maintain/update typing bubble while streaming
     LaunchedEffect(loading, stream) {
         if (loading) {
             val txt = stream.ifBlank { "…" }
@@ -257,10 +343,11 @@ fun AiScreen(
         }
     }
 
-    // Replace typing bubble with pretty JSON on final
+    // On final result (JSON), pretty print and replace typing bubble
     LaunchedEffect(raw, loading) {
         if (!raw.isNullOrBlank() && !loading) {
-            val jsonPretty = Json { prettyPrint = true; prettyPrintIndent = " "; ignoreUnknownKeys = true }
+            val jsonPretty =
+                Json { prettyPrint = true; prettyPrintIndent = " "; ignoreUnknownKeys = true }
             val pretty = prettyOrRaw(jsonPretty, raw!!)
             vmAI.chatReplaceTypingWith(
                 nodeId,
@@ -273,7 +360,7 @@ fun AiScreen(
         }
     }
 
-    // Append follow-up when idle; also persist to Survey
+    // Append follow-up when idle and persist to Survey
     LaunchedEffect(followup, loading) {
         val fu = followup
         if (fu != null && !loading) {
@@ -292,15 +379,18 @@ fun AiScreen(
 
     // If finished without final raw (cancel/error), remove typing bubble
     LaunchedEffect(loading, raw) {
-        if (!loading && raw.isNullOrBlank()) {
-            vmAI.chatRemoveTyping(nodeId)
-        }
+        if (!loading && raw.isNullOrBlank()) vmAI.chatRemoveTyping(nodeId)
     }
 
-    // Auto-scroll when chat size changes
+    // Auto-scroll on chat size change. Also auto-speak the latest AI text message.
     LaunchedEffect(chat.size) {
         delay(16)
         scroll.animateScrollTo(scroll.maxValue)
+        chat.lastOrNull()?.let { m ->
+            val isAiText =
+                (m.sender != AiViewModel.ChatSender.USER) && !m.text.isNullOrBlank() && m.json == null
+            if (isAiText && ttsReady && !ttsMuted) speak(m.text!!)
+        }
     }
 
     // Keep pinned to bottom while streaming grows
@@ -317,7 +407,6 @@ fun AiScreen(
     Scaffold(
         topBar = { CompactTopBar(title = "Question • $nodeId") },
         snackbarHost = { SnackbarHost(snack) },
-        contentWindowInsets = WindowInsets(0),
         bottomBar = {
             Surface(
                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
@@ -329,6 +418,7 @@ fun AiScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .windowInsetsPadding(WindowInsets.ime)
+                        .windowInsetsPadding(WindowInsets.navigationBars)
                         .padding(top = 6.dp)
                 ) {
                     ChatComposer(
@@ -341,9 +431,7 @@ fun AiScreen(
                         enabled = !loading,
                         focusRequester = focusRequester,
                         onMicClick = {
-                            if (micRecording) {
-                                stopStt()
-                            } else {
+                            if (micRecording) stopStt() else {
                                 val granted = ContextCompat.checkSelfPermission(
                                     context, Manifest.permission.RECORD_AUDIO
                                 ) == PackageManager.PERMISSION_GRANTED
@@ -353,27 +441,33 @@ fun AiScreen(
                         },
                         micRecording = micRecording
                     )
-                    HorizontalDivider(Modifier, DividerDefaults.Thickness, DividerDefaults.color)
+
+                    // Bottom action row: fully split left/right
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .background(bgBrush)
+                            .padding(horizontal = 24.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         TextButton(
-                            onClick = {
-                                vmAI.resetStates()
-                                onBack()
-                            }
+                            onClick = { vmAI.resetStates(); onBack() },
+                            colors = ButtonDefaults.textButtonColors(
+                                containerColor = Color(0xFF263238),
+                                contentColor = Color.White
+                            ),
+                            modifier = Modifier.clip(RoundedCornerShape(6.dp))
                         ) { Text("Back") }
 
-                        Spacer(Modifier.weight(1f))
-
                         OutlinedButton(
-                            onClick = {
-                                vmAI.resetStates()
-                                onNext()
-                            }
+                            onClick = { vmAI.resetStates(); onNext() },
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = Color.White,
+                                contentColor = Color(0xFF111111)
+                            ),
+                            border = ButtonDefaults.outlinedButtonBorder(enabled = true),
+                            modifier = Modifier.clip(RoundedCornerShape(6.dp))
                         ) { Text("Next") }
                     }
                 }
@@ -386,7 +480,7 @@ fun AiScreen(
                 .fillMaxSize()
                 .background(bgBrush)
                 .pointerInput(Unit) {
-                    // Background tap clears focus and hides IME
+                    // Background tap clears focus and hides IME.
                     detectTapGestures {
                         focusManager.clearFocus(force = true)
                         keyboard?.hide()
@@ -395,6 +489,7 @@ fun AiScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            // Chat list with inline "speak" icon only on the question bubble
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -403,6 +498,11 @@ fun AiScreen(
             ) {
                 chat.forEach { m ->
                     val isAi = m.sender != AiViewModel.ChatSender.USER
+                    // Robust check: treat leading/trailing whitespace as equal
+                    val isQuestionBubble =
+                        isAi && m.json == null &&
+                                m.text?.trim().orEmpty() == question.trim()
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = if (isAi) Arrangement.Start else Arrangement.End
@@ -413,7 +513,16 @@ fun AiScreen(
                             BubbleMono(
                                 text = m.text.orEmpty(),
                                 isAi = isAi,
-                                isTyping = m.isTyping
+                                isTyping = m.isTyping,
+                                // Speak icon only on the question bubble
+                                showSpeak = isQuestionBubble,
+                                canSpeak = ttsReady && !ttsMuted,
+                                onSpeak = {
+                                    if (ttsReady && !ttsMuted) speak(question) else scope.launch {
+                                        snack.showSnackbar(if (!ttsReady) "Voice unavailable" else "Voice is muted")
+                                    }
+                                },
+                                onStopSpeak = { stopSpeak() }
                             )
                         }
                     }
@@ -422,10 +531,8 @@ fun AiScreen(
         }
     }
 
-    // Clear transient AI-only state when leaving this node (keeps chat history)
-    DisposableEffect(Unit) {
-        onDispose { vmAI.resetStates() }
-    }
+    // Clear transient AI-only state when leaving this node (keep chat history).
+    DisposableEffect(Unit) { onDispose { vmAI.resetStates() } }
 }
 
 /* ───────────────────────────────── App Bar ───────────────────────────────── */
@@ -469,7 +576,12 @@ private fun BubbleMono(
     text: String,
     isAi: Boolean,
     isTyping: Boolean,
-    maxWidth: Dp = 520.dp
+    maxWidth: Dp = 520.dp,
+    // NEW: speak icon controls
+    showSpeak: Boolean = false,
+    canSpeak: Boolean = false,
+    onSpeak: (() -> Unit)? = null,
+    onStopSpeak: (() -> Unit)? = null
 ) {
     val cs = MaterialTheme.colorScheme
 
@@ -491,7 +603,7 @@ private fun BubbleMono(
         label = "p"
     )
     val grad = Brush.linearGradient(
-        colors = stops.map { c -> lerp(c, cs.surface, 0.12f) },
+        colors = stops.map { c -> androidx.compose.ui.graphics.lerp(c, cs.surface, 0.12f) },
         start = Offset(0f, 0f),
         end = Offset(400f + 220f * p, 360f - 180f * p)
     )
@@ -537,14 +649,29 @@ private fun BubbleMono(
             }
             .neutralEdge(alpha = 0.18f, corner = corner, stroke = 0.8.dp)
     ) {
-        Box(Modifier.padding(horizontal = padH, vertical = padV)) {
+        Row(
+            modifier = Modifier.padding(horizontal = padH, vertical = padV),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             if (isTyping && text.isBlank()) {
                 TypingDots(color = textColor)
+                Spacer(Modifier.width(6.dp))
             } else {
                 Text(
                     text = text,
                     color = textColor,
-                    style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 18.sp)
+                    style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 18.sp),
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+            }
+
+            // NEW: tiny speak icon on the right (only when showSpeak = true)
+            if (showSpeak) {
+                SpeakIcon(
+                    enabled = canSpeak,
+                    onTap = { onSpeak?.invoke() },
+                    onLongPress = { onStopSpeak?.invoke() },
+                    tint = textColor.copy(alpha = if (canSpeak) 1f else 0.5f)
                 )
             }
         }
@@ -553,16 +680,74 @@ private fun BubbleMono(
 
 @Composable
 private fun TypingDots(color: Color) {
+    // Simple 3-dot typing indicator with staggered alpha animation
     val t = rememberInfiniteTransition(label = "typing")
-    val a1 by t.animateFloat(0.2f, 1f, infiniteRepeatable(tween(900, 0, LinearEasing)), label = "a1")
-    val a2 by t.animateFloat(0.2f, 1f, infiniteRepeatable(tween(900, 150, LinearEasing)), label = "a2")
-    val a3 by t.animateFloat(0.2f, 1f, infiniteRepeatable(tween(900, 300, LinearEasing)), label = "a3")
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Dot(a1, color); Dot(a2, color); Dot(a3, color)
+    val a1 by t.animateFloat(
+        0.2f,
+        1f,
+        infiniteRepeatable(tween(900, 0, LinearEasing)),
+        label = "a1"
+    )
+    val a2 by t.animateFloat(
+        0.2f,
+        1f,
+        infiniteRepeatable(tween(900, 150, LinearEasing)),
+        label = "a2"
+    )
+    val a3 by t.animateFloat(
+        0.2f,
+        1f,
+        infiniteRepeatable(tween(900, 300, LinearEasing)),
+        label = "a3"
+    )
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(8.dp)
+                .background(color.copy(alpha = a1), CircleShape)
+        )
+        Box(
+            Modifier
+                .size(8.dp)
+                .background(color.copy(alpha = a2), CircleShape)
+        )
+        Box(
+            Modifier
+                .size(8.dp)
+                .background(color.copy(alpha = a3), CircleShape)
+        )
     }
 }
-@Composable private fun Dot(alpha: Float, color: Color) {
-    Box(Modifier.size(8.dp).background(color.copy(alpha = alpha), CircleShape))
+
+@Composable
+private fun SpeakIcon(
+    enabled: Boolean,
+    onTap: () -> Unit,
+    onLongPress: () -> Unit,
+    tint: Color
+) {
+    // Compact icon area supporting both tap (speak) and long-press (stop)
+    Box(
+        modifier = Modifier
+            .size(28.dp) // slightly larger touch target for accessibility
+            .pointerInput(enabled) {
+                detectTapGestures(
+                    onTap = { if (enabled) onTap() },
+                    onLongPress = { onLongPress() }
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = if (enabled) Icons.Outlined.VolumeUp else Icons.Outlined.VolumeOff,
+            contentDescription = if (enabled) "Speak the question" else "Voice is off",
+            tint = tint,
+            modifier = Modifier.size(18.dp)
+        )
+    }
 }
 
 /* ───────────────────────────── JSON bubble ──────────────────────────────── */
@@ -575,8 +760,6 @@ private fun JsonBubbleMono(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
-    val clipboard = LocalClipboardManager.current
-    val scope = rememberCoroutineScope()
     val clip = RoundedCornerShape(10.dp)
 
     Surface(
@@ -588,7 +771,9 @@ private fun JsonBubbleMono(
             .widthIn(max = 580.dp)
             .animateContentSize()
             .neutralEdge(alpha = 0.16f, corner = 10.dp, stroke = 1.dp)
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() }) {
                 expanded = !expanded
             }
     ) {
@@ -616,14 +801,12 @@ private fun JsonBubbleMono(
                     color = cs.onSurfaceVariant,
                     modifier = Modifier.weight(1f)
                 )
-                IconButton(
-                    onClick = {
-                        clipboard.setText(AnnotatedString(pretty))
-                        scope.launch { snack?.showSnackbar("JSON copied") }
-                    },
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(Icons.Outlined.ContentCopy, contentDescription = "Copy", tint = cs.onSurfaceVariant)
+                IconButton(onClick = {
+                    // Hook platform clipboard here if needed
+                    // LocalClipboardManager.current.setText(AnnotatedString(pretty))
+                    // snack?.showSnackbar("JSON copied")
+                }) {
+                    Icon(Icons.Outlined.ContentCopy, contentDescription = "Copy JSON")
                 }
             }
 
@@ -737,7 +920,7 @@ private fun ChatComposer(
 /* ─────────────────────────── Visual utilities ───────────────────────────── */
 
 @Composable
-private fun animatedMonotoneBackplate(): Brush {
+fun animatedMonotoneBackplate(): Brush {
     val cs = MaterialTheme.colorScheme
     val t = rememberInfiniteTransition(label = "bg-mono")
     val p by t.animateFloat(
@@ -749,10 +932,10 @@ private fun animatedMonotoneBackplate(): Brush {
         label = "bgp"
     )
 
-    val c0 = lerp(Color(0xFF0F0F10), cs.surface, 0.10f)
-    val c1 = lerp(Color(0xFF1A1A1B), cs.surface, 0.12f)
-    val c2 = lerp(Color(0xFF2A2A2B), cs.surface, 0.14f)
-    val c3 = lerp(Color(0xFF3A3A3B), cs.surface, 0.16f)
+    val c0 = androidx.compose.ui.graphics.lerp(Color(0xFF0F0F10), cs.surface, 0.10f)
+    val c1 = androidx.compose.ui.graphics.lerp(Color(0xFF1A1A1B), cs.surface, 0.12f)
+    val c2 = androidx.compose.ui.graphics.lerp(Color(0xFF2A2A2B), cs.surface, 0.14f)
+    val c3 = androidx.compose.ui.graphics.lerp(Color(0xFF3A3A3B), cs.surface, 0.16f)
 
     val endX = 1200f + 240f * p
     val endY = 820f - 180f * p
@@ -765,10 +948,10 @@ private fun animatedMonotoneBackplate(): Brush {
 }
 
 /**
- * Neutral rim edge (very subtle sweep gradient).
+ * Draws a very subtle sweep gradient stroke to create a neutral rim/edge.
  */
 @Composable
-private fun Modifier.neutralEdge(
+fun Modifier.neutralEdge(
     alpha: Float = 0.16f,
     corner: Dp = 12.dp,
     stroke: Dp = 1.dp
@@ -839,7 +1022,9 @@ private fun findMatchingJsonBoundary(text: String, start: Int): Int {
     while (i < text.length) {
         val c = text[i]
         if (inString) {
-            if (c == '\\' && i + 1 < text.length) { i += 2; continue }
+            if (c == '\\' && i + 1 < text.length) {
+                i += 2; continue
+            }
             if (c == '"') inString = false
         } else {
             when (c) {
@@ -862,9 +1047,14 @@ private fun findMatchingJsonBoundary(text: String, start: Int): Int {
 @Composable
 private fun ChatPreview() {
     MaterialTheme {
+        val fakeQuestion = "How much yield do you lose because of FAW?"
         val fake = listOf(
-            AiViewModel.ChatMsgVm("q", AiViewModel.ChatSender.AI, text = "How much yield do you lose because of FAW?"),
-            AiViewModel.ChatMsgVm("u1", AiViewModel.ChatSender.USER, text = "About 10% over 3 seasons."),
+            AiViewModel.ChatMsgVm("q", AiViewModel.ChatSender.AI, text = fakeQuestion),
+            AiViewModel.ChatMsgVm(
+                "u1",
+                AiViewModel.ChatSender.USER,
+                text = "About 10% over 3 seasons."
+            ),
             AiViewModel.ChatMsgVm(
                 "r1",
                 AiViewModel.ChatSender.AI,
@@ -877,7 +1067,11 @@ private fun ChatPreview() {
                     }
                 """.trimIndent()
             ),
-            AiViewModel.ChatMsgVm("fu", AiViewModel.ChatSender.AI, text = "Is that 10% per season or overall?")
+            AiViewModel.ChatMsgVm(
+                "fu",
+                AiViewModel.ChatSender.AI,
+                text = "Is that 10% per season or overall?"
+            )
         )
         val scroll = rememberScrollState()
         Column(
@@ -894,12 +1088,22 @@ private fun ChatPreview() {
             ) {
                 fake.forEach { m ->
                     val isAi = m.sender != AiViewModel.ChatSender.USER
+                    val isQuestionBubble =
+                        isAi && m.json == null && m.text?.trim().orEmpty() == fakeQuestion.trim()
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = if (isAi) Arrangement.Start else Arrangement.End
                     ) {
                         if (m.json != null) JsonBubbleMono(pretty = m.json)
-                        else BubbleMono(m.text.orEmpty(), isAi = isAi, isTyping = false)
+                        else BubbleMono(
+                            text = m.text.orEmpty(),
+                            isAi = isAi,
+                            isTyping = false,
+                            showSpeak = isQuestionBubble,
+                            canSpeak = true,
+                            onSpeak = { /* preview no-op */ },
+                            onStopSpeak = { /* preview no-op */ }
+                        )
                     }
                 }
             }

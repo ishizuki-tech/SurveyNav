@@ -32,7 +32,7 @@ object FollowupExtractor {
      * - convert any run of [space/_/unicode-dash/zero-width] to a single '-'
      */
     private fun normKey(k: String): String =
-        k.lowercase().replace(Regex("""[\s_​\u200B\u200C\u200D\u2060\u2010-\u2015]+"""), "-")
+        k.lowercase().replace(Regex("""[\s_​\u200C\u200D\u2060\u2010-\u2015]+"""), "-")
 
     /** Normalized followup-like keys we consider as primary containers. */
     private val FOLLOWUP_KEYS_NORM: Set<String> = setOf(
@@ -55,7 +55,7 @@ object FollowupExtractor {
     private val NUMBER_0_TO_100_REGEX = Regex("""\b(?:100|[1-9]?\d)\b""")
 
     /** Sentence-ish split for plain text fallback. */
-    private val SENTENCE_SPLIT_REGEX = Regex("""(?<=\?|？)|[\r\n]+|(?<=[。．!！])""")
+    private val SENTENCE_SPLIT_REGEX = Regex("""(?<=[?？])|[\r\n]+|(?<=[。．!！])""")
 
     /* --------------------------------------------------------------------- */
     /* Public API                                                            */
@@ -333,8 +333,8 @@ object FollowupExtractor {
                             '"' -> inString = true
                             '{' -> stack.addLast('{')
                             '[' -> stack.addLast('[')
-                            '}' -> if (stack.isNotEmpty() && stack.last() == '{') stack.removeLast()
-                            ']' -> if (stack.isNotEmpty() && stack.last() == '[') stack.removeLast()
+                            '}' -> if (stack.last() == '{') stack.removeLast()
+                            ']' -> if (stack.last() == '[') stack.removeLast()
                         }
                     }
                     i++
