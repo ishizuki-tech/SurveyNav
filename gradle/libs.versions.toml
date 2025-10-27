@@ -30,7 +30,7 @@ uiGeometry = "1.9.3" # Geometry utilities (e.g. Offset, Size) for Compose
 foundationLayout = "1.9.3" # Advanced layout elements like FlowRow, etc.
 
 # Third-Party Libraries
-kaml = "0.97.0" # YAML parser using kotlinx.serialization
+kaml = "0.99.0" # YAML parser using kotlinx.serialization
 okhttp = "5.2.1" # HTTP networking library from Square
 okhttpDnsoverhttps = "5.2.1" # Secure DNS (DoH) with OkHttp
 kotlinxSerializationJson = "1.9.0" # JSON serializer/deserializer using kotlinx.serialization

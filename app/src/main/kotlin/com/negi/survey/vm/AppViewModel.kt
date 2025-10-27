@@ -60,7 +60,6 @@ class AppViewModel(
 
     private val _state = MutableStateFlow<DlState>(DlState.Idle)
     val state: StateFlow<DlState> = _state
-
     /**
      * Ensures that the model is downloaded once. If already downloading or done, skips execution.
      */
@@ -104,11 +103,11 @@ class AppViewModel(
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) {
                 val code = resp.code
-                val msg = resp.body?.string()?.take(200)
-                throw IOException("HTTP $code ${msg ?: ""}".trim())
+                val msg = resp.body.string().take(200)
+                throw IOException("HTTP $code ${msg}".trim())
             }
 
-            val body = resp.body ?: throw IOException("empty body")
+            val body = resp.body
             val total = body.contentLength().takeIf { it >= 0 }
 
             body.byteStream().use { input ->
