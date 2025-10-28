@@ -84,6 +84,7 @@ object SLM {
 
     @Synchronized
     fun initialize(context: Context, model: Model, onDone: (String) -> Unit) {
+
         var oldEngine: LlmInference? = null
         var oldSession: LlmInferenceSession? = null
 

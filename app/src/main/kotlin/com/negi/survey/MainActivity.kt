@@ -1,8 +1,9 @@
-@file:Suppress("UnusedParameter")
+@file:Suppress("UnusedParameter", "UNCHECKED_CAST")
 
 package com.negi.survey
 
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -10,6 +11,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -17,187 +19,189 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
-import androidx.navigation3.runtime.*
-import androidx.navigation3.scene.rememberSceneSetupNavEntryDecorator
+import androidx.navigation3.runtime.NavBackStack
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
+import com.negi.survey.config.SurveyConfig
 import com.negi.survey.config.SurveyConfigLoader
-import com.negi.survey.net.GitHubConfig
+import com.negi.survey.config.toSlmMpConfigMap
+import com.negi.survey.net.GitHubUploader
 import com.negi.survey.screens.*
 import com.negi.survey.slm.*
+import com.negi.survey.ui.theme.SurveyNavTheme
 import com.negi.survey.vm.*
-import kotlinx.coroutines.*
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-/**
- * Entry point of the Android application.
- * Sets up edge-to-edge content and launches the main navigation composable.
- */
 class MainActivity : ComponentActivity() {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // ------------------------------------------------------------
+        // Load YAML config safely
+        // ------------------------------------------------------------
+        val configResult = runCatching {
+            SurveyConfigLoader.fromAssets(this, "survey_config1.yaml").also { it.validateOrThrow() }
+        }
+        val config: SurveyConfig? = configResult.getOrNull()
+        val md = config?.modelDefaultsOrFallback() ?: SurveyConfig.ModelDefaults()
+
+        // ------------------------------------------------------------
+        // AppViewModel (download manager)
+        // ------------------------------------------------------------
+        val appFactory = AppViewModel.factory(
+            url = md.defaultModelUrl,
+            fileName = md.defaultFileName,
+            timeoutMs = md.timeoutMs,
+            uiThrottleMs = md.uiThrottleMs,
+            uiMinDeltaBytes = md.uiMinDeltaBytes
+        )
+        val appVm = ViewModelProvider(this, appFactory)[AppViewModel::class.java]
+
+        // ------------------------------------------------------------
+        // Compose entry point
+        // ------------------------------------------------------------
         setContent {
-            MaterialTheme {
-                AppNav()
-            }
-        }
-    }
-}
+            SurveyNavTheme {
+                val context = LocalContext.current
+                val snackbar = remember { SnackbarHostState() }
+                var showDownload by rememberSaveable { mutableStateOf(true) }
 
-/**
- * A Composable gate that shows loading or retry UI while performing initialization.
- * - It resets state when the key changes.
- * - The init block should suspend until initialization is complete.
- */
-@Composable
-fun InitGate(
-    modifier: Modifier = Modifier,
-    key: Any? = Unit,
-    init: suspend () -> Unit,
-    progressText: String = "Initializing…",
-    onErrorMessage: (Throwable) -> String = { it.message ?: "Initialization failed" },
-    content: @Composable () -> Unit
-) {
-    var isLoading by remember(key) { mutableStateOf(true) }
-    var error by remember(key) { mutableStateOf<Throwable?>(null) }
-    val scope = rememberCoroutineScope()
-
-    // Triggers initialization coroutine
-    fun kick() {
-        isLoading = true
-        error = null
-        scope.launch {
-            try {
-                init()
-                isLoading = false
-            } catch (t: Throwable) {
-                error = t
-                isLoading = false
-            }
-        }
-    }
-
-    LaunchedEffect(key) { kick() }
-
-    when {
-        isLoading -> {
-            Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.height(12.dp))
-                    Text(progressText, style = MaterialTheme.typography.bodyMedium)
+                // YAML load error handling
+                configResult.exceptionOrNull()?.let { err ->
+                    ErrorScreen(err, snackbar)
+                    return@SurveyNavTheme
                 }
-            }
-        }
-        error != null -> {
-            Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(onErrorMessage(error!!), style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedButton(onClick = { kick() }) { Text("Retry") }
-                }
-            }
-        }
-        else -> content()
-    }
-}
 
-/**
- * Root-level navigation controller for the app.
- * Handles model downloading and initialization of the Small Language Model (SLM).
- */
-@Composable
-fun AppNav() {
-    val appContext = LocalContext.current.applicationContext
-    val appVm: AppViewModel = viewModel(factory = AppViewModel.factory())
-    val state by appVm.state.collectAsState()
+                if (showDownload) {
+                    // ---------------- Download Phase ----------------
+                    DownloadScreen(vm = appVm) { showDownload = false }
+                } else {
+                    // ---------------- Main Phase ----------------
+                    val backStack = rememberNavBackStack(FlowHome)
 
-    // Trigger model download on first launch if in idle state
-    LaunchedEffect(state) {
-        if (state is DlState.Idle) {
-            appVm.ensureModelDownloaded(appContext)
-        }
-    }
+                    val modelFile = remember { appVm.expectedLocalFile(context) }
+                    val modelPath = remember(modelFile) { modelFile.absolutePath }
 
-    DownloadGate(
-        state = state,
-        onRetry = { appVm.ensureModelDownloaded(appContext) }
-    ) { modelFile ->
+                    val slmCfg = remember(config?.hashCode()) { config?.toSlmMpConfigMap() }
 
-        // Remember SLM model instance
-        val slmModel = remember(modelFile.absolutePath) {
-            Model(
-                name = "gemma-3n-E4B-it",
-                taskPath = modelFile.absolutePath,
-                config = mapOf(
-                    ConfigKey.ACCELERATOR to Accelerator.GPU.label,
-                    ConfigKey.MAX_TOKENS to 2048,
-                    ConfigKey.TOP_K to 1,
-                    ConfigKey.TOP_P to 0.0f,
-                    ConfigKey.TEMPERATURE to 0.0f
-                )
-            )
-        }
+                    val slmModel = remember(modelPath) {
+                        Model(
+                            name = md.defaultFileName,
+                            taskPath = modelPath,
+                            config = slmCfg ?: mapOf(
+                                ConfigKey.ACCELERATOR to Accelerator.GPU.name,
+                                ConfigKey.MAX_TOKENS to 1024
+                            )
+                        )
+                    }
 
-        // Initialize SLM with blocking coroutine until ready
-        InitGate(
-            key = slmModel,
-            progressText = "Initializing Small Language Model …",
-            onErrorMessage = { "Failed to initialize model: ${it.message}" },
-            init = {
-                withContext(Dispatchers.Default) {
-                    suspendCancellableCoroutine { cont ->
-                        SLM.initialize(appContext, slmModel) { err ->
-                            if (err.isEmpty()) cont.resume(Unit)
-                            else cont.resumeWithException(IllegalStateException(err))
+                    val repo: Repository = remember(slmModel, config) {
+                        SlmDirectRepository(slmModel, config!!)
+                    }
+
+                    // --------------------------------------------------------
+                    // AiViewModel (SLM controller)
+                    // --------------------------------------------------------
+                    val aiVm: AiViewModel = viewModel(
+                        key = "AiViewModel",
+                        factory = object : ViewModelProvider.Factory {
+                            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                                return AiViewModel(repo) as T
+                            }
+                        }
+                    )
+
+                    // --------------------------------------------------------
+                    // SurveyViewModel (YAML-driven flow)
+                    // --------------------------------------------------------
+                    val vmSurvey: SurveyViewModel = viewModel(
+                        key = "SurveyVM",
+                        factory = SurveyViewModel.factory(nav = backStack, config = config!!)
+                    )
+
+                    // --------------------------------------------------------
+                    // Initialize SLM (offload to IO to avoid ANR)
+                    // --------------------------------------------------------
+                    LaunchedEffect(modelPath) {
+                        aiVm.setInitializing(true)
+
+                        withContext(Dispatchers.IO) {
+                            SLM.initialize(context.applicationContext, slmModel) { msg ->
+                                // コールバック内は通常関数なので launch(Main) でUI更新
+                                kotlinx.coroutines.CoroutineScope(Dispatchers.Main).launch {
+                                    if (msg.isNotEmpty()) {
+                                        Toast.makeText(
+                                            context,
+                                            "SLM init failed: $msg",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                        aiVm.setInitialized(false)
+                                    } else {
+                                        Toast.makeText(
+                                            context,
+                                            "SLM initialized",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                        aiVm.setInitialized(true)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    val ui by aiVm.ui.collectAsState()
+                    // --------------------------------------------------------
+                    // Blocking overlay while SLM initializing
+                    // --------------------------------------------------------
+                    if (ui.isInitializing) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .imePadding(),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                CircularProgressIndicator()
+                                Spacer(Modifier.height(12.dp))
+                                Text(
+                                    text = "Initializing SLM engine…",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+                    else {
+
+                        Box(Modifier.fillMaxSize()) {
+                            // --------------------------------------------------------
+                            // Main Navigation Host
+                            // --------------------------------------------------------
+                            SurveyNavHost(
+                                vmSurvey = vmSurvey,
+                                vmAI = aiVm,
+                                backStack = backStack
+                            )
                         }
                     }
                 }
             }
-        ) {
-            // Clean up SLM resources when no longer in composition
-            DisposableEffect(slmModel) {
-                onDispose {
-                    SLM.cleanUp(slmModel) { }
-                }
-            }
-
-            val backStack = rememberNavBackStack(FlowHome)
-
-            // Load static survey configuration from assets
-            val config = remember(appContext) {
-                SurveyConfigLoader.fromAssets(appContext, "survey_config1.json")
-            }
-
-            // Setup direct repository for SLM communication
-            val repo: Repository = remember(appContext, slmModel) {
-                SlmDirectRepository(appContext, slmModel)
-            }
-
-            // Provide SurveyViewModel with navigation and config
-            val vmSurvey: SurveyViewModel = viewModel(factory = object : ViewModelProvider.Factory {
-                @Suppress("UNCHECKED_CAST")
-                override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    SurveyViewModel(nav = backStack, config = config) as T
-            })
-
-            // Provide AiViewModel with direct SLM repository
-            val vmAI: AiViewModel = viewModel(factory = object : ViewModelProvider.Factory {
-                @Suppress("UNCHECKED_CAST")
-                override fun <T : ViewModel> create(modelClass: Class<T>): T = AiViewModel(repo) as T
-            })
-
-            SurveyNavHost(vmSurvey, vmAI, backStack)
         }
     }
 }
 
-/**
- * Sets up navigation host for the survey flow.
- * Delegates each navigation entry to the corresponding screen.
- */
+// ============================================================================
+// Survey Navigation Host
+// ============================================================================
 @Composable
 fun SurveyNavHost(
     vmSurvey: SurveyViewModel,
@@ -205,18 +209,14 @@ fun SurveyNavHost(
     backStack: NavBackStack<NavKey>
 ) {
     Box(
-        Modifier.fillMaxSize().imePadding()
+        modifier = Modifier
+            .fillMaxSize()
+            .imePadding()
     ) {
-        UploadProgressOverlay()
-
         NavDisplay(
             backStack = backStack,
-            entryDecorators = listOf(
-                rememberSceneSetupNavEntryDecorator(),
-                rememberSavedStateNavEntryDecorator(),
-                rememberViewModelStoreNavEntryDecorator()
-            ),
             entryProvider = entryProvider {
+                // ---------------- Home ----------------
                 entry<FlowHome> {
                     IntroScreen(
                         onStart = {
@@ -225,6 +225,8 @@ fun SurveyNavHost(
                         }
                     )
                 }
+
+                // ---------------- Text Input ----------------
                 entry<FlowText> {
                     val node by vmSurvey.currentNode.collectAsState()
                     if (node.type != NodeType.TEXT) return@entry
@@ -236,6 +238,8 @@ fun SurveyNavHost(
                         onBack = { vmSurvey.backToPrevious() }
                     )
                 }
+
+                // ---------------- AI Interaction ----------------
                 entry<FlowAI> {
                     val node by vmSurvey.currentNode.collectAsState()
                     if (node.type != NodeType.AI) return@entry
@@ -247,6 +251,8 @@ fun SurveyNavHost(
                         onBack = { vmSurvey.backToPrevious() }
                     )
                 }
+
+                // ---------------- Review ----------------
                 entry<FlowReview> {
                     val node by vmSurvey.currentNode.collectAsState()
                     if (node.type != NodeType.REVIEW) return@entry
@@ -256,18 +262,24 @@ fun SurveyNavHost(
                         onBack = { vmSurvey.backToPrevious() }
                     )
                 }
+
+                // ---------------- Done ----------------
                 entry<FlowDone> {
                     val node by vmSurvey.currentNode.collectAsState()
                     if (node.type != NodeType.DONE) return@entry
-                    val gh = if (BuildConfig.GH_TOKEN.isNotEmpty()) {
-                        GitHubConfig(
-                            owner = BuildConfig.GH_OWNER,
-                            repo = BuildConfig.GH_REPO,
-                            branch = BuildConfig.GH_BRANCH,
-                            pathPrefix = BuildConfig.GH_PATH_PREFIX,
-                            token = BuildConfig.GH_TOKEN
-                        )
-                    } else null
+
+                    val gh = runCatching {
+                        if (BuildConfig.GH_TOKEN.isNotEmpty()) {
+                            GitHubUploader.GitHubConfig(
+                                owner = BuildConfig.GH_OWNER,
+                                repo = BuildConfig.GH_REPO,
+                                branch = BuildConfig.GH_BRANCH,
+                                pathPrefix = BuildConfig.GH_PATH_PREFIX,
+                                token = BuildConfig.GH_TOKEN
+                            )
+                        } else null
+                    }.getOrNull()
+
                     DoneScreen(
                         vm = vmSurvey,
                         onRestart = { vmSurvey.resetToStart() },
@@ -277,7 +289,9 @@ fun SurveyNavHost(
             }
         )
 
-        // Global back handler to reset AI state and navigate back
+        // ----------------------------------------------------
+        // Global back handler: resets AI and navigates backward
+        // ----------------------------------------------------
         BackHandler(enabled = true) {
             vmAI.resetStates()
             vmSurvey.backToPrevious()

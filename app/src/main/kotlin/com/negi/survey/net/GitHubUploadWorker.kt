@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -18,6 +19,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.negi.survey.R
+
 import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
@@ -39,11 +41,12 @@ class GitHubUploadWorker(
     params: WorkerParameters
 ) : CoroutineWorker(appContext, params) {
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     override suspend fun doWork(): Result {
         // --- Read & validate inputs (fail fast with clear semantics) ---
-        val cfg = GitHubConfig(
+        val cfg = GitHubUploader.GitHubConfig(
             owner = inputData.getString(KEY_OWNER).orEmpty(),
-            repo  = inputData.getString(KEY_REPO).orEmpty(),
+            repo = inputData.getString(KEY_REPO).orEmpty(),
             token = inputData.getString(KEY_TOKEN).orEmpty(),
             branch = inputData.getString(KEY_BRANCH).orEmpty(),
             pathPrefix = inputData.getString(KEY_PATH_PREFIX).orEmpty()
@@ -146,6 +149,7 @@ class GitHubUploadWorker(
      * - Ongoing while in progress; auto-stops on success/failure.
      * - Android 14/15: declares DATA_SYNC foreground service type.
      */
+    @RequiresApi(Build.VERSION_CODES.Q)
     private fun foregroundInfo(
         notificationId: Int,
         pct: Int,
@@ -179,19 +183,18 @@ class GitHubUploadWorker(
     }
 
     /** Ensures the notification channel exists on Android O+. Id must match the builder. */
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun ensureChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Background Uploads",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "GitHub upload progress"
-                setShowBadge(false)
-            }
-            nm.createNotificationChannel(channel)
+        val nm = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            "Background Uploads",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "GitHub upload progress"
+            setShowBadge(false)
         }
+        nm.createNotificationChannel(channel)
     }
 
     companion object {
@@ -229,7 +232,7 @@ class GitHubUploadWorker(
          * - Requires network; uses expedited if quota permits, otherwise falls back.
          * - Applies exponential backoff for robust retries.
          */
-        fun enqueueExistingPayload(context: Context, cfg: GitHubConfig, file: File) {
+        fun enqueueExistingPayload(context: Context, cfg: GitHubUploader.GitHubConfig, file: File) {
             val fileName = file.name
             val req = OneTimeWorkRequestBuilder<GitHubUploadWorker>()
                 .setInputData(
@@ -268,7 +271,7 @@ class GitHubUploadWorker(
          */
         fun enqueue(
             context: Context,
-            cfg: GitHubConfig,
+            cfg: GitHubUploader.GitHubConfig,
             fileName: String,
             jsonContent: String
         ) {

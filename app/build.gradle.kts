@@ -117,10 +117,8 @@ android {
 dependencies {
     // ===== Compose BOM =====
     implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.navigation3.runtime)
     androidTestImplementation(platform(libs.androidx.compose.bom))
-
-    implementation(libs.nav3.runtime)
-    implementation(libs.nav3.ui)
 
     // Kotlin / Coroutines / Serialization
     implementation(libs.kotlinx.coroutines.android)
@@ -130,14 +128,21 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
 
+    // Jetpack Navigation 3
+    implementation(libs.nav3.runtime)
+    implementation(libs.nav3.ui)
+
+    // Kotlin and Serialization
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kaml)
+
     // Compose
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
-    implementation(libs.androidx.foundation)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
-    implementation(libs.androidx.runtime.saveable)
 
     // Debug/Preview
     debugImplementation(libs.androidx.ui.tooling)
@@ -155,20 +160,12 @@ dependencies {
     // WorkManager
     implementation(libs.androidx.work.runtime.ktx)
 
-    // Networking
-    implementation(libs.okhttp)
-    implementation(libs.okhttp.dnsoverhttps)
-
     // Media3
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.ui)
 
     // MediaPipe GenAI
-    implementation(libs.mediapipe.tasks.text)
     implementation(libs.mediapipe.tasks.genai)
-
-    // Accompanist
-    implementation(libs.accompanist.navigation.animation)
 
     // SAF (androidTest uses DocumentFile)
     androidTestImplementation(libs.androidx.documentfile)
@@ -184,7 +181,6 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.ui.test.junit4)
     androidTestImplementation(libs.androidx.work.testing)
-    androidTestImplementation(libs.mockk.android)
     androidTestImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.mockito.android)
 

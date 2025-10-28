@@ -2,12 +2,13 @@ package com.negi.survey.vm
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
-import com.negi.survey.config.NodeDTO
 import com.negi.survey.config.SurveyConfig
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.Serializable
+import kotlin.collections.iterator
 
 private const val TAG = "SurveyVM"
 
@@ -22,20 +23,25 @@ interface BackStackPort<K : NavKey> {
 }
 
 /**
- * Adapter to bridge Navigation3's NavBackStack with BackStackPort.
- */
-class Nav3BackStackAdapter(
-    private val delegate: NavBackStack<NavKey>
-) : BackStackPort<NavKey> {
-    override fun add(key: NavKey) = delegate.add(key)
-    override fun removeLastOrNull(): NavKey? = delegate.removeLastOrNull()
-    override fun clear() = delegate.clear()
-}
-
-/**
  * Survey node types for flow branching.
  */
-enum class NodeType { START, TEXT, SINGLE_CHOICE, MULTI_CHOICE, AI, REVIEW, DONE }
+enum class NodeType {
+    START, TEXT, SINGLE_CHOICE, MULTI_CHOICE, AI, REVIEW, DONE, UNKNOWN;
+
+    companion object {
+        /** Tolerant mapper from raw strings to enum values. */
+        fun from(raw: String?): NodeType = when (raw?.trim()?.uppercase()) {
+            "START"         -> START
+            "TEXT"          -> TEXT
+            "SINGLE_CHOICE" -> SINGLE_CHOICE
+            "MULTI_CHOICE"  -> MULTI_CHOICE
+            "AI"            -> AI
+            "REVIEW"        -> REVIEW
+            "DONE"          -> DONE
+            else            -> UNKNOWN
+        }
+    }
+}
 
 /**
  * Runtime node model built from config.
@@ -71,24 +77,22 @@ sealed interface UiEvent {
 /**
  * Main ViewModel for managing survey state, answers, navigation, and follow-ups.
  */
-class SurveyViewModel(
+open class SurveyViewModel(
     val nav: NavBackStack<NavKey>,
     private val config: SurveyConfig,
 ) : ViewModel() {
+    companion object {
+        private const val TAG = "SurveyViewModel"
+        private const val DEBUG_LOGS = true
+        fun factory(nav: NavBackStack<NavKey>, config: SurveyConfig): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = SurveyViewModel(nav, config) as T
+        }
+    }
 
     // Graph configuration loaded from JSON
-    private val graph: Map<String, Node>
+    private val graph: Map<String, Node> = config.graph.nodes.associateBy { it.id }.mapValues { (_, dto) -> dto.toNode() }
     private val startId: String = config.graph.startId
-
-    // Converts DTO to internal node model
-    private fun NodeDTO.toNode(): Node = Node(
-        id = id,
-        type = runCatching { NodeType.valueOf(type.uppercase()) }.getOrElse { NodeType.TEXT },
-        title = title,
-        question = question,
-        options = options,
-        nextId = nextId
-    )
 
     // Gets a Node from ID or throws if missing
     private fun nodeOf(id: String): Node =
@@ -240,6 +244,7 @@ class SurveyViewModel(
         NodeType.AI -> FlowAI
         NodeType.REVIEW -> FlowReview
         NodeType.DONE -> FlowDone
+        else -> throw IllegalArgumentException("Unknown node type: ${node.type}")
     }
 
     /**
@@ -338,14 +343,12 @@ class SurveyViewModel(
 
     private fun <T> LinkedHashMap<String, MutableList<T>>.toImmutableLists(): Map<String, List<T>> =
         this.mapValues { it.value.toList() }
-
     private fun <T> StateFlow<T>.subscribe(onEach: (T) -> Unit) {
         onEach(value)
     }
-
     // Initialize graph and set first node
+    // Converts DTO to internal node model
     init {
-        graph = config.graph.nodes.associateBy { it.id }.mapValues { (_, dto) -> dto.toNode() }
         val start = nodeOf(startId)
         _currentNode.value = start
         nodeStack.addLast(start.id)

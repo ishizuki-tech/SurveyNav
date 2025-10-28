@@ -1,3 +1,5 @@
+@file:Suppress("UNUSED_PARAMETER")
+
 package com.negi.survey.screens
 
 import android.content.ContentValues
@@ -6,58 +8,38 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.annotation.RequiresApi
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Divider
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.negi.survey.net.GitHubConfig
 import com.negi.survey.net.GitHubUploader
-import com.negi.survey.vm.SurveyViewModel
+import com.negi.survey.net.GitHubUploader.GitHubConfig
 import com.negi.survey.net.GitHubUploadWorker
+import com.negi.survey.vm.SurveyViewModel
 import kotlinx.coroutines.launch
 import java.io.File
 
 /**
- * Done screen:
- * - Lists answers and follow-ups
- * - Copy / Upload to GitHub
- * - Optional auto-save to device (no picker)
- * - Schedule upload when online (WorkManager)
+ * DoneScreen
+ * ------------------------------------------------------------------
+ * - Displays final answers & follow-ups
+ * - Allows JSON export (clipboard / save / upload)
+ * - Supports GitHub upload and WorkManager scheduling
+ * - Auto-save to device (Downloads/SurveyNav)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DoneScreen(
     vm: SurveyViewModel,
     onRestart: () -> Unit,
-    gitHubConfig: GitHubConfig? = null,   // pass to enable upload/schedule buttons
-    autoSaveToDevice: Boolean = false     // set true to auto-save once on first show
+    gitHubConfig: GitHubConfig? = null,
+    autoSaveToDevice: Boolean = false
 ) {
     val questions by vm.questions.collectAsState(initial = emptyMap())
     val answers by vm.answers.collectAsState(initial = emptyMap())
@@ -69,48 +51,18 @@ fun DoneScreen(
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
 
-    // Build JSON export text (answers + followups)
+    // Build JSON representation for export
     val jsonText = remember(questions, answers, followups) {
-        buildString {
-            append("{\n")
-            append("  \"answers\": {\n")
-            questions.entries.forEachIndexed { idx, (id, q) ->
-                val a = answers[id]?.replace("\n", "\\n") ?: ""
-                append("    \"").append(escapeJson(id)).append("\": {\n")
-                append("      \"question\": \"").append(escapeJson(q)).append("\",\n")
-                append("      \"answer\": \"").append(escapeJson(a)).append("\"\n")
-                append("    }")
-                if (idx != questions.size - 1) append(",")
-                append("\n")
-            }
-            append("  },\n")
-            append("  \"followups\": {\n")
-            followups.entries.forEachIndexed { i, (ownerId, list) ->
-                append("    \"").append(escapeJson(ownerId)).append("\": [\n")
-                list.forEachIndexed { j, fu ->
-                    val q = fu.question.replace("\n", "\\n")
-                    val a = (fu.answer ?: "").replace("\n", "\\n")
-                    append("      { \"question\": \"").append(escapeJson(q))
-                        .append("\", \"answer\": \"").append(escapeJson(a)).append("\" }")
-                    if (j != list.lastIndex) append(",")
-                    append("\n")
-                }
-                append("    ]")
-                if (i != followups.size - 1) append(",")
-                append("\n")
-            }
-            append("  }\n")
-            append("}\n")
-        }
+        buildJsonExport(questions, answers, followups)
     }
 
-    // Run once on first composition to auto-save (no picker)
+    // Auto-save once when enabled
     val autoSavedOnce = remember { mutableStateOf(false) }
     LaunchedEffect(autoSaveToDevice, jsonText) {
         if (autoSaveToDevice && !autoSavedOnce.value) {
             val fileName = "survey_${System.currentTimeMillis()}.json"
             runCatching {
-                val result = saveJsonAutomatically(context = context, fileName = fileName, content = jsonText)
+                val result = saveJsonAutomatically(context, fileName, jsonText)
                 autoSavedOnce.value = true
                 snackbar.showOnce("Saved to device: ${result.location}")
             }.onFailure { e ->
@@ -119,9 +71,10 @@ fun DoneScreen(
         }
     }
 
-    Scaffold(containerColor = Color.Transparent,
+    Scaffold(
+        containerColor = Color.Transparent,
         topBar = { TopAppBar(title = { Text("Done") }) },
-        snackbarHost = { SnackbarHost(hostState = snackbar) }
+        snackbarHost = { SnackbarHost(snackbar) }
     ) { pad ->
         Column(
             modifier = Modifier
@@ -133,9 +86,8 @@ fun DoneScreen(
             Text("Thanks! Here is your response summary.", style = MaterialTheme.typography.bodyLarge)
             Spacer(Modifier.height(16.dp))
 
-            // Answers
-            Text("■ Answers", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
+            // Answers Section
+            SectionTitle("■ Answers")
             if (questions.isEmpty()) {
                 Text("No answers yet.", style = MaterialTheme.typography.bodyMedium)
             } else {
@@ -144,7 +96,7 @@ fun DoneScreen(
                     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                         Text("Q: $q", style = MaterialTheme.typography.bodyMedium)
                         Spacer(Modifier.height(4.dp))
-                        Text("A: ${if (a.isBlank()) "(empty)" else a}", style = MaterialTheme.typography.bodyLarge)
+                        Text("A: ${a.ifBlank { "(empty)" }}", style = MaterialTheme.typography.bodyLarge)
                     }
                     Divider()
                 }
@@ -152,9 +104,8 @@ fun DoneScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            // Follow-ups
-            Text("■ Follow-ups", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
+            // Follow-ups Section
+            SectionTitle("■ Follow-ups")
             if (followups.isEmpty()) {
                 Text("No follow-ups.", style = MaterialTheme.typography.bodyMedium)
             } else {
@@ -164,10 +115,9 @@ fun DoneScreen(
                         Spacer(Modifier.height(6.dp))
                         list.forEachIndexed { idx, fu ->
                             Text("${idx + 1}. ${fu.question}", style = MaterialTheme.typography.bodyMedium)
-                            val ans = fu.answer
-                            if (!ans.isNullOrBlank()) {
+                            fu.answer?.takeIf { it.isNotBlank() }?.let {
                                 Spacer(Modifier.height(2.dp))
-                                Text("   ↳ $ans", style = MaterialTheme.typography.bodyLarge)
+                                Text("   ↳ $it", style = MaterialTheme.typography.bodyLarge)
                             }
                             Spacer(Modifier.height(6.dp))
                         }
@@ -178,12 +128,31 @@ fun DoneScreen(
 
             Spacer(Modifier.height(24.dp))
 
-            // Actions
+            // Upload (WorkManager) Button
+            if (gitHubConfig != null) {
+                CenteredRow {
+                    Button(onClick = {
+                        val fileName = "survey_${System.currentTimeMillis()}.json"
+                        GitHubUploadWorker.enqueue(
+                            context = context,
+                            cfg = gitHubConfig,
+                            fileName = fileName,
+                            jsonContent = jsonText
+                        )
+                        scope.launch { snackbar.showOnce("Upload scheduled (will run when online).") }
+                    }) {
+                        Text("Upload when Online")
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // Upload now + Restart row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Immediate upload (requires network now)
                 if (gitHubConfig != null) {
                     Button(
                         onClick = {
@@ -211,27 +180,16 @@ fun DoneScreen(
                             }
                         },
                         enabled = !uploading.value
-                    ) { Text(if (uploading.value) "Uploading..." else "Upload now") }
-                }
+                    ) {
+                        Text(if (uploading.value) "Uploading..." else "Upload now")
+                    }
 
-                // Schedule upload (runs when online; survives reboot)
-                if (gitHubConfig != null) {
-                    Button(
-                        onClick = {
-                            val fileName = "survey_${System.currentTimeMillis()}.json"
-                            GitHubUploadWorker.enqueue(
-                                context = context,
-                                cfg = gitHubConfig,
-                                fileName = fileName,
-                                jsonContent = jsonText
-                            )
-                            scope.launch { snackbar.showOnce("Upload scheduled (will run when online).") }
-                        }
-                    ) { Text("Upload when Online") }
+                    Spacer(Modifier.weight(1f))
+                    Button(onClick = {
+                        onRestart()
+                        scope.launch { snackbar.showOnce("Restarting for new survey...") }
+                    }) { Text("Start Over...") }
                 }
-
-                Spacer(Modifier.weight(1f))
-                Button(onClick = onRestart) { Text("Restart") }
             }
 
             Spacer(Modifier.height(12.dp))
@@ -241,16 +199,68 @@ fun DoneScreen(
 }
 
 /* ============================================================
- * Auto-save helpers (no user interaction)
+ * Helper Composables / Utilities
+ * ============================================================ */
+
+@Composable
+private fun SectionTitle(title: String) {
+    Text(title, style = MaterialTheme.typography.titleMedium)
+    Spacer(Modifier.height(8.dp))
+}
+
+@Composable
+private fun CenteredRow(content: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        content = content
+    )
+}
+
+/* ============================================================
+ * JSON Export Builder
+ * ============================================================ */
+
+private fun buildJsonExport(
+    questions: Map<String, String>,
+    answers: Map<String, String>,
+    followups: Map<String, List<SurveyViewModel.FollowupEntry>>
+): String = buildString {
+    append("{\n  \"answers\": {\n")
+    questions.entries.forEachIndexed { idx, (id, q) ->
+        val a = answers[id]?.replace("\n", "\\n") ?: ""
+        append("    \"").append(escapeJson(id)).append("\": {\n")
+        append("      \"question\": \"").append(escapeJson(q)).append("\",\n")
+        append("      \"answer\": \"").append(escapeJson(a)).append("\"\n")
+        append("    }")
+        if (idx != questions.size - 1) append(",")
+        append("\n")
+    }
+    append("  },\n  \"followups\": {\n")
+    followups.entries.forEachIndexed { i, (ownerId, list) ->
+        append("    \"").append(escapeJson(ownerId)).append("\": [\n")
+        list.forEachIndexed { j, fu ->
+            append("      { \"question\": \"")
+                .append(escapeJson(fu.question))
+                .append("\", \"answer\": \"")
+                .append(escapeJson(fu.answer ?: ""))
+                .append("\" }")
+            if (j != list.lastIndex) append(",")
+            append("\n")
+        }
+        append("    ]")
+        if (i != followups.size - 1) append(",")
+        append("\n")
+    }
+    append("  }\n}\n")
+}
+
+/* ============================================================
+ * Save JSON automatically (no user picker)
  * ============================================================ */
 
 private data class SaveResult(val uri: Uri?, val file: File?, val location: String)
 
-/**
- * Saves JSON automatically:
- * - API 29+ -> MediaStore Downloads/SurveyNav (visible in Files app)
- * - API 28- -> app-specific external Downloads/SurveyNav (no permission)
- */
 private fun saveJsonAutomatically(
     context: android.content.Context,
     fileName: String,
@@ -296,8 +306,7 @@ private fun saveToAppExternalPreQ(
     fileName: String,
     content: String
 ): SaveResult {
-    val base = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-        ?: context.filesDir
+    val base = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
     val dir = File(base, "SurveyNav").apply { mkdirs() }
     val file = File(dir, fileName)
     file.writeText(content, Charsets.UTF_8)
@@ -305,7 +314,7 @@ private fun saveToAppExternalPreQ(
 }
 
 /* ============================================================
- * Snackbar + JSON utils
+ * Snackbar / JSON utils
  * ============================================================ */
 
 private suspend fun SnackbarHostState.showOnce(message: String) {
@@ -313,16 +322,15 @@ private suspend fun SnackbarHostState.showOnce(message: String) {
     showSnackbar(message)
 }
 
-private fun escapeJson(s: String): String =
-    buildString(s.length + 8) {
-        s.forEach { ch ->
-            when (ch) {
-                '\"' -> append("\\\"")
-                '\\' -> append("\\\\")
-                '\n' -> append("\\n")
-                '\r' -> append("\\r")
-                '\t' -> append("\\t")
-                else -> append(ch)
-            }
+private fun escapeJson(s: String): String = buildString(s.length + 8) {
+    s.forEach { ch ->
+        when (ch) {
+            '\"' -> append("\\\"")
+            '\\' -> append("\\\\")
+            '\n' -> append("\\n")
+            '\r' -> append("\\r")
+            '\t' -> append("\\t")
+            else -> append(ch)
         }
     }
+}

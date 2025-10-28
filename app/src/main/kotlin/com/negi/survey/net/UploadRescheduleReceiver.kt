@@ -3,8 +3,8 @@ package com.negi.survey.net
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import com.negi.survey.BuildConfig
+
 import java.io.File
 
 /**
@@ -28,13 +28,13 @@ class UploadRescheduleReceiver : BroadcastReceiver() {
             Intent.ACTION_BOOT_COMPLETED -> true
             Intent.ACTION_MY_PACKAGE_REPLACED -> true
             // Support direct-boot delivery when declared as directBootAware in the manifest (N+)
-            "android.intent.action.LOCKED_BOOT_COMPLETED" -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
+            "android.intent.action.LOCKED_BOOT_COMPLETED" -> true
             else -> false
         }
         if (!handled) return
 
         // Build GitHub configuration from BuildConfig (project-provided)
-        val cfg = GitHubConfig(
+        val cfg = GitHubUploader.GitHubConfig(
             owner = BuildConfig.GH_OWNER,
             repo = BuildConfig.GH_REPO,
             token = BuildConfig.GH_TOKEN,

@@ -26,6 +26,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.work.WorkInfo
 import com.negi.survey.vm.UploadItemUi
 import com.negi.survey.vm.UploadQueueViewModel
+import androidx.core.net.toUri
 
 @Composable
 fun UploadProgressOverlay(
@@ -101,7 +102,8 @@ private fun UploadRow(u: UploadItemUi) {
                     Text("${u.percent}%", style = MaterialTheme.typography.labelSmall)
                 }
             }
-            WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED -> {
+            WorkInfo.State.ENQUEUED,
+            WorkInfo.State.BLOCKED -> {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
             WorkInfo.State.SUCCEEDED -> {
@@ -110,7 +112,7 @@ private fun UploadRow(u: UploadItemUi) {
                     Spacer(Modifier.height(6.dp))
                     TextButton(
                         onClick = {
-                            val i = Intent(Intent.ACTION_VIEW, Uri.parse(u.fileUrl))
+                            val i = Intent(Intent.ACTION_VIEW, u.fileUrl.toUri())
                             ctx.startActivity(i)
                         }
                     ) { Text("Open on GitHub") }

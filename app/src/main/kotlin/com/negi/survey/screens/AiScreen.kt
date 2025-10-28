@@ -60,11 +60,12 @@ import com.negi.survey.vm.AiViewModel
 import com.negi.survey.vm.SurveyViewModel
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlin.collections.ArrayDeque
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalSerializationApi::class)
 @Composable
 fun AiScreen(
     nodeId: String,
@@ -226,7 +227,7 @@ fun AiScreen(
                             Spacer(Modifier.height(6.dp))
                             Surface(tonalElevation = 2.dp, modifier = Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(12.dp)) {
-                                    Text(if (stream.isBlank()) "Waiting for response …" else stream)
+                                    Text(stream.ifBlank { "Waiting for response …" })
                                 }
                             }
                         }
