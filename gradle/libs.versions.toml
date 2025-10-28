@@ -38,12 +38,7 @@ navigation3 = "1.0.0-alpha10"
 workRuntimeKtx = "2.11.0"
 
 # ---------------- Compose UI / Foundation ----------------
-foundation = "1.9.4"
-foundationLayout = "1.9.4"
-uiGeometry = "1.9.4"
 material3 = "1.4.0"
-uiText = "1.9.4"
-runtimeSaveable = "1.9.4"
 
 # ---------------- Kotlinx / Coroutines / Serialization ----------------
 kotlinxSerializationJson = "1.9.0"
@@ -105,12 +100,7 @@ androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
-androidx-compose-foundation = { group = "androidx.compose.foundation", name = "foundation", version.ref = "foundation" }
-androidx-compose-foundation-layout = { group = "androidx.compose.foundation", name = "foundation-layout", version.ref = "foundationLayout" }
-androidx-compose-ui-geometry = { group = "androidx.compose.ui", name = "ui-geometry", version.ref = "uiGeometry" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "material3" }
-androidx-compose-ui-text = { group = "androidx.compose.ui", name = "ui-text", version.ref = "uiText" }
-androidx-compose-runtime-saveable = { group = "androidx.compose.runtime", name = "runtime-saveable", version.ref = "runtimeSaveable" }
 
 # --- Media  ---
 androidx-media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3Exoplayer" }
